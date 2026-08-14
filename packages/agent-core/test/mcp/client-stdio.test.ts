@@ -32,16 +32,17 @@ describe('stdio MCP working directory resolution', () => {
 });
 
 describe('StdioMcpClient', () => {
-  it('projects MCP unions into Moonshot-flavored JSON Schema without mutating the source', () => {
+  it('projects root MCP unions into Moonshot tool parameters without mutating the source', () => {
     const source = {
       type: 'object',
       properties: { ref: { type: 'string' } },
       anyOf: [{ type: 'object', required: ['ref'] }],
     };
     const projected = projectMcpToolSchemaForProvider(source);
-    expect(projected['type']).toBeUndefined();
-    expect((projected['anyOf'] as Array<Record<string, unknown>>)[0]?.['type']).toBe('object');
+    expect(projected['type']).toBe('object');
+    expect(projected['anyOf']).toBeUndefined();
     expect(source.type).toBe('object');
+    expect(source.anyOf).toHaveLength(1);
   });
 
   it('uses handshake-free self-describing requests for MCP 2026-07-28', async () => {

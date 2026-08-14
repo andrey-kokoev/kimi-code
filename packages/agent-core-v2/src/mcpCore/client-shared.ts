@@ -156,17 +156,7 @@ export function projectMcpToolSchemaForProvider(
   schema: Record<string, unknown>,
 ): Record<string, unknown> {
   const projected = structuredClone(schema);
-  const visit = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      value.forEach(visit);
-      return;
-    }
-    if (typeof value !== 'object' || value === null) return;
-    const object = value as Record<string, unknown>;
-    if (Array.isArray(object['anyOf'])) delete object['type'];
-    Object.values(object).forEach(visit);
-  };
-  visit(projected);
+  if (Array.isArray(projected['anyOf'])) delete projected['anyOf'];
   return projected;
 }
 
