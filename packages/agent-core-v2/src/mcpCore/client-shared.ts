@@ -3,12 +3,87 @@
  */
 
 import { getCoreVersion } from '#/_base/version';
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
+import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 
 import type { MCPClient, MCPToolDefinition, MCPToolResult } from './types';
 
 export const KIMI_MCP_CLIENT_NAME = 'kimi-code';
 export const KIMI_MCP_CLIENT_VERSION = getCoreVersion();
+export const MODERN_MCP_PROTOCOL_VERSION = '2026-07-28';
+
+const ModernDiscoveryResultSchema = z.object({
+  resultType: z.string(),
+  supportedVersions: z.array(z.string()),
+  capabilities: z.record(z.string(), z.unknown()),
+  serverInfo: z.object({ name: z.string(), version: z.string() }).optional(),
+  _meta: z.record(z.string(), z.unknown()).optional(),
+});
+
+export async function connectModernStdioClient(
+  client: Client,
+  transport: Transport,
+  options: McpRequestOptions | undefined,
+): Promise<void> {
+  const originalSend = transport.send.bind(transport);
+  transport.send = async (message, sendOptions) => {
+    let outgoing = message;
+    if ('method' in message && 'id' in message) {
+      const params =
+        typeof message.params === 'object' && message.params !== null && !Array.isArray(message.params)
+          ? message.params
+          : {};
+      const existingMeta =
+        typeof params._meta === 'object' && params._meta !== null && !Array.isArray(params._meta)
+          ? params._meta
+          : {};
+      outgoing = {
+        ...message,
+        params: {
+          ...params,
+          _meta: {
+            ...existingMeta,
+            'io.modelcontextprotocol/protocolVersion': MODERN_MCP_PROTOCOL_VERSION,
+            'io.modelcontextprotocol/clientInfo': {
+              name: KIMI_MCP_CLIENT_NAME,
+              version: KIMI_MCP_CLIENT_VERSION,
+            },
+            'io.modelcontextprotocol/clientCapabilities': {},
+          },
+        },
+      } as JSONRPCMessage;
+    }
+    await originalSend(outgoing, sendOptions);
+  };
+
+  const previousSessionId = transport.sessionId;
+  transport.sessionId = 'mcp-2026-handshake-free';
+  try {
+    await client.connect(transport, options);
+  } finally {
+    transport.sessionId = previousSessionId;
+  }
+
+  const discovery = await client.request(
+    { method: 'server/discover', params: {} },
+    ModernDiscoveryResultSchema,
+    options,
+  );
+  if (!discovery.supportedVersions.includes(MODERN_MCP_PROTOCOL_VERSION)) {
+    await client.close();
+    throw new Error(`Server does not support MCP ${MODERN_MCP_PROTOCOL_VERSION}`);
+  }
+  const state = client as unknown as {
+    _serverCapabilities?: Record<string, unknown>;
+    _serverVersion?: { name: string; version: string };
+  };
+  state._serverCapabilities = discovery.capabilities;
+  state._serverVersion = discovery.serverInfo;
+  transport.setProtocolVersion?.(MODERN_MCP_PROTOCOL_VERSION);
+}
 
 export interface UnexpectedCloseReason {
   readonly error?: Error;

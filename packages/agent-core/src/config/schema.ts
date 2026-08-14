@@ -275,6 +275,7 @@ export const ServicesConfigSchema = z.object({
 export type ServicesConfig = z.infer<typeof ServicesConfigSchema>;
 
 const McpServerCommonFields = {
+  protocolVersion: z.enum(['2026-07-28']).optional(),
   enabled: z.boolean().optional(),
   startupTimeoutMs: McpTimeoutMsSchema.optional(),
   toolTimeoutMs: McpTimeoutMsSchema.optional(),

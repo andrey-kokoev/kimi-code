@@ -20,6 +20,7 @@ export const MAX_MCP_TIMEOUT_MS = 2_147_483_647;
 export const McpTimeoutMsSchema = z.number().int().min(1).max(MAX_MCP_TIMEOUT_MS);
 
 const McpServerCommonFields = {
+  protocolVersion: z.enum(['2026-07-28']).optional(),
   enabled: z.boolean().optional(),
   startupTimeoutMs: McpTimeoutMsSchema.optional(),
   toolTimeoutMs: McpTimeoutMsSchema.optional(),

@@ -11,6 +11,7 @@ import { mergeStdioEnv, resolveStdioCwd, StdioMcpClient } from '../../src/mcp/cl
 
 const here = import.meta.dirname;
 const fixture = join(here, 'fixtures', 'mock-stdio-server.mjs');
+const modernFixture = join(here, 'fixtures', 'modern-stdio-server.mjs');
 const cwdFixture = join(here, 'fixtures', 'cwd-stdio-server.mjs');
 const stderrThenExitFixture = join(here, 'fixtures', 'stderr-then-exit-stdio-server.mjs');
 const crashAfterConnectFixture = join(here, 'fixtures', 'crash-after-connect-stdio-server.mjs');
@@ -30,6 +31,25 @@ describe('stdio MCP working directory resolution', () => {
 });
 
 describe('StdioMcpClient', () => {
+  it('uses handshake-free self-describing requests for MCP 2026-07-28', async () => {
+    const client = new StdioMcpClient({
+      transport: 'stdio',
+      command: process.execPath,
+      args: [modernFixture],
+      protocolVersion: '2026-07-28',
+    });
+    try {
+      await client.connect();
+      expect(await client.listTools()).toEqual([
+        { name: 'echo', description: 'Echoes input text', inputSchema: { type: 'object' } },
+      ]);
+      const result = await client.callTool('echo', { text: 'modern' });
+      expect(result.content).toEqual([{ type: 'text', text: 'modern' }]);
+    } finally {
+      await client.close();
+    }
+  });
+
   it('rejects unsupported executor at construction time', () => {
     expect(
       () =>

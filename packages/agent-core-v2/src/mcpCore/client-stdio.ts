@@ -11,6 +11,7 @@ import { isAbsolute, resolve } from 'pathe';
 
 import {
   buildRequestOptions,
+  connectModernStdioClient,
   KIMI_MCP_CLIENT_NAME,
   KIMI_MCP_CLIENT_VERSION,
   MCP_LIVENESS_PROBE_TIMEOUT_MS,
@@ -36,6 +37,7 @@ export class StdioMcpClient implements MCPClient {
   private readonly transport: StdioClientTransport;
   private readonly startupTimeoutMs?: number;
   private readonly toolCallTimeoutMs?: number;
+  private readonly modernProtocol: boolean;
   private readonly stderrBuffer = new BoundedTail(STDERR_BUFFER_CAPACITY);
   private started = false;
   private closed = false;
@@ -67,6 +69,7 @@ export class StdioMcpClient implements MCPClient {
     });
     this.startupTimeoutMs = options.startupTimeoutMs;
     this.toolCallTimeoutMs = options.toolCallTimeoutMs;
+    this.modernProtocol = config.protocolVersion === '2026-07-28';
   }
 
   async connect(): Promise<void> {
@@ -77,10 +80,12 @@ export class StdioMcpClient implements MCPClient {
     this.started = true;
     this.installTransportHooks();
     try {
-      await this.client.connect(
-        this.transport,
-        buildRequestOptions(this.startupTimeoutMs, undefined),
-      );
+      const requestOptions = buildRequestOptions(this.startupTimeoutMs, undefined);
+      if (this.modernProtocol) {
+        await connectModernStdioClient(this.client, this.transport, requestOptions);
+      } else {
+        await this.client.connect(this.transport, requestOptions);
+      }
     } catch (error) {
       await this.closeStartedClient();
       throw error;
