@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { KimiError } from '../../src/errors';
 import { mergeStdioEnv, resolveStdioCwd, StdioMcpClient } from '../../src/mcp/client-stdio';
+import { projectMcpToolSchemaForProvider } from '../../src/mcp/client-shared';
 
 const here = import.meta.dirname;
 const fixture = join(here, 'fixtures', 'mock-stdio-server.mjs');
@@ -31,6 +32,18 @@ describe('stdio MCP working directory resolution', () => {
 });
 
 describe('StdioMcpClient', () => {
+  it('projects MCP unions into Moonshot-flavored JSON Schema without mutating the source', () => {
+    const source = {
+      type: 'object',
+      properties: { ref: { type: 'string' } },
+      anyOf: [{ type: 'object', required: ['ref'] }],
+    };
+    const projected = projectMcpToolSchemaForProvider(source);
+    expect(projected['type']).toBeUndefined();
+    expect((projected['anyOf'] as Array<Record<string, unknown>>)[0]?.['type']).toBe('object');
+    expect(source.type).toBe('object');
+  });
+
   it('uses handshake-free self-describing requests for MCP 2026-07-28', async () => {
     const client = new StdioMcpClient({
       transport: 'stdio',

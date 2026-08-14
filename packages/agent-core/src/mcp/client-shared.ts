@@ -130,8 +130,26 @@ export function toMcpToolDefinition(tool: SdkListedTool): MCPToolDefinition {
   return {
     name: tool.name,
     description: tool.description ?? '',
-    inputSchema: tool.inputSchema,
+    inputSchema: projectMcpToolSchemaForProvider(tool.inputSchema),
   };
+}
+
+export function projectMcpToolSchemaForProvider(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  const projected = structuredClone(schema);
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (typeof value !== 'object' || value === null) return;
+    const object = value as Record<string, unknown>;
+    if (Array.isArray(object['anyOf'])) delete object['type'];
+    Object.values(object).forEach(visit);
+  };
+  visit(projected);
+  return projected;
 }
 
 /**
