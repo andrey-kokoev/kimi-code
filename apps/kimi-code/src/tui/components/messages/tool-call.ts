@@ -565,6 +565,8 @@ export class ToolCallComponent extends Container {
   private readonly rendererState: Record<string, unknown> = {};
   private callRendererComponent: Component | undefined;
   private resultRendererComponent: Component | undefined;
+  /** Delta output emitted by a running tool before its terminal result arrives. */
+  private partialRendererResult: ToolResultBlockData | undefined;
   /** Mirrors Pi's lifecycle flag: pending calls are partial until a result lands. */
   private rendererIsPartial: boolean;
   /** Streaming previews have not started execution yet; finalized calls have. */
@@ -791,6 +793,7 @@ export class ToolCallComponent extends Container {
 
   setResult(result: ToolResultBlockData): void {
     this.result = result;
+    this.partialRendererResult = undefined;
     this.rendererIsPartial = false;
     this.rendererExecutionStarted = true;
     // Result supersedes any live progress chatter; the result body is the
@@ -815,6 +818,12 @@ export class ToolCallComponent extends Container {
 
   updateToolCall(toolCall: ToolCallBlockData): void {
     this.toolCall = toolCall;
+    if (this.partialRendererResult !== undefined) {
+      this.partialRendererResult = {
+        ...this.partialRendererResult,
+        tool_call_id: toolCall.id,
+      };
+    }
     this.rendererExecutionStarted =
       this.result !== undefined || toolCall.streamingArguments === undefined;
     this.syncStreamingProgressTimer();
@@ -839,6 +848,7 @@ export class ToolCallComponent extends Container {
     while (this.progressLines.length > ToolCallComponent.MAX_PROGRESS_LINES) {
       this.progressLines.shift();
     }
+    this.updatePartialRendererResult();
     this.rebuildBody();
     this.notifySnapshotChange();
     this.ui?.requestRender();
@@ -852,6 +862,7 @@ export class ToolCallComponent extends Container {
         this.liveOutput.length - MAX_LIVE_OUTPUT_CHARS,
       )}`;
     }
+    this.updatePartialRendererResult();
     this.rebuildContent();
     this.notifySnapshotChange();
     this.ui?.requestRender();
@@ -1608,6 +1619,32 @@ export class ToolCallComponent extends Container {
     return this.toolCall.streamingArguments === undefined && this.toolCall.truncated !== true;
   }
 
+  private currentRendererResult(): ToolResultBlockData | undefined {
+    return this.result ?? this.partialRendererResult;
+  }
+
+  private usesPartialToolResultRenderer(): boolean {
+    return (
+      this.result === undefined &&
+      this.partialRendererResult !== undefined &&
+      this.toolDefinition?.renderResult !== undefined
+    );
+  }
+
+  private updatePartialRendererResult(): void {
+    if (this.result !== undefined) return;
+    const progress = this.progressLines.join('\n');
+    const output = [progress, this.liveOutput].filter((part) => part.length > 0).join('\n');
+    this.partialRendererResult =
+      output.length === 0
+        ? undefined
+        : {
+            tool_call_id: this.toolCall.id,
+            output,
+            is_error: false,
+          };
+  }
+
   private createToolRenderContext(
     lastComponent: Component | undefined,
   ): ToolRenderContext {
@@ -1626,7 +1663,7 @@ export class ToolCallComponent extends Container {
       isPartial: this.rendererIsPartial,
       expanded: this.expanded,
       showImages: true,
-      isError: this.result?.is_error === true,
+      isError: this.currentRendererResult()?.is_error === true,
     };
   }
 
@@ -1635,8 +1672,9 @@ export class ToolCallComponent extends Container {
   }
 
   private createToolRenderResultFallback(): Component[] {
-    if (this.result === undefined) return [];
-    return renderTruncated(this.toolCall, this.result, { expanded: this.expanded });
+    const result = this.currentRendererResult();
+    if (result === undefined) return [];
+    return renderTruncated(this.toolCall, result, { expanded: this.expanded });
   }
 
   private tryBuildCustomCallRenderer(): Component | undefined {
@@ -1659,14 +1697,15 @@ export class ToolCallComponent extends Container {
 
   private tryBuildCustomResultRenderer(): Component | undefined {
     const renderer = this.toolDefinition?.renderResult;
-    if (renderer === undefined || this.result === undefined) return undefined;
+    const result = this.currentRendererResult();
+    if (renderer === undefined || result === undefined) return undefined;
     const options: ToolRenderResultOptions = {
       expanded: this.expanded,
       isPartial: this.rendererIsPartial,
     };
     try {
       const component = renderer(
-        this.result,
+        result,
         options,
         currentTheme,
         this.createToolRenderContext(this.resultRendererComponent),
@@ -1686,7 +1725,7 @@ export class ToolCallComponent extends Container {
     const call = this.tryBuildCustomCallRenderer() ?? this.createToolRenderCallFallback();
     this.selfRenderContainer.addChild(call);
 
-    if (this.result === undefined) return;
+    if (this.currentRendererResult() === undefined) return;
     const result = this.tryBuildCustomResultRenderer();
     if (result !== undefined) {
       this.selfRenderContainer.addChild(result);
@@ -1705,9 +1744,11 @@ export class ToolCallComponent extends Container {
     while (this.children.length > this.callPreviewEndIndex) {
       this.children.pop();
     }
-    this.buildProgressBlock();
-    this.buildDetachHintBlock();
-    this.buildLiveOutputBlock();
+    if (!this.usesPartialToolResultRenderer()) {
+      this.buildProgressBlock();
+      this.buildDetachHintBlock();
+      this.buildLiveOutputBlock();
+    }
     this.buildContent();
     this.buildSubagentBlock();
   }
@@ -1722,9 +1763,11 @@ export class ToolCallComponent extends Container {
     }
     this.buildCallPreview();
     this.callPreviewEndIndex = this.children.length;
-    this.buildProgressBlock();
-    this.buildDetachHintBlock();
-    this.buildLiveOutputBlock();
+    if (!this.usesPartialToolResultRenderer()) {
+      this.buildProgressBlock();
+      this.buildDetachHintBlock();
+      this.buildLiveOutputBlock();
+    }
     this.buildContent();
     this.buildSubagentBlock();
   }
@@ -2333,12 +2376,19 @@ export class ToolCallComponent extends Container {
   }
 
   private buildContent(): void {
-    const { result } = this;
-    if (result === undefined) return;
-
     const customResult = this.tryBuildCustomResultRenderer();
     if (customResult !== undefined) {
       this.addChild(customResult);
+      return;
+    }
+
+    const { result } = this;
+    if (result === undefined) {
+      if (this.toolDefinition?.renderResult !== undefined) {
+        for (const fallback of this.createToolRenderResultFallback()) {
+          this.addChild(fallback);
+        }
+      }
       return;
     }
 

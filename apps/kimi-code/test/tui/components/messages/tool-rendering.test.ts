@@ -67,6 +67,41 @@ describe('tool-owned transcript rendering', () => {
     expect(calls).toEqual(['call:alpha:true', 'call:alpha:true', 'result:false:false']);
   });
 
+  it('passes streamed progress to result renderers as partial output', () => {
+    const partials: Array<{ output: string; isPartial: boolean }> = [];
+    const definition: ToolRenderDefinition = {
+      name: 'StreamingCustom',
+      renderShell: 'self',
+      renderCall: () => new Text('streaming call', 0, 0),
+      renderResult: (toolResult, options) => {
+        partials.push({ output: toolResult.output, isPartial: options.isPartial });
+        return new Text(`streaming result: ${toolResult.output}`, 0, 0);
+      },
+    };
+
+    const component = new ToolCallComponent(
+      call('StreamingCustom'),
+      undefined,
+      undefined,
+      undefined,
+      definition,
+    );
+    component.appendProgress('waiting');
+    expect(strip(component.render(100).join('\n'))).toContain('streaming result: waiting');
+
+    component.appendLiveOutput('done');
+    const streamed = strip(component.render(100).join('\n'));
+    expect(streamed).toContain('streaming result: waiting');
+    expect(streamed).toContain('done');
+
+    component.setResult(result('final'));
+    expect(partials).toEqual([
+      { output: 'waiting', isPartial: true },
+      { output: 'waiting\ndone', isPartial: true },
+      { output: 'final', isPartial: false },
+    ]);
+  });
+
   it('keeps the existing shell when renderShell is omitted', () => {
     const definition: ToolRenderDefinition = {
       name: 'DefaultShell',
