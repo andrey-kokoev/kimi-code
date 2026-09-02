@@ -12,6 +12,22 @@ import type {
 import type { NotificationsConfig, StatusLineConfig, UpgradePreferences } from './config';
 import type { PendingApproval, PendingQuestion } from './reverse-rpc/types';
 import type { ColorToken, ThemeName } from './theme';
+import type {
+  ToolRenderDefinitions,
+} from './components/messages/tool-renderers/types';
+
+export type {
+  AnyToolRenderDefinition,
+  ToolCallRenderer,
+  ToolDefinition,
+  ToolRenderContext,
+  ToolRenderDefinition,
+  ToolRenderDefinitions,
+  ToolRenderResultOptions,
+  ToolRendererDefinition,
+  ToolRenderShell,
+  ToolResultRenderer,
+} from './components/messages/tool-renderers/types';
 
 export type BannerDisplay = 'always' | 'once' | 'cooldown';
 
@@ -129,6 +145,8 @@ export interface ToolResultBlockData {
   tool_call_id: string;
   output: string;
   is_error?: boolean;
+  /** Optional structured details for tool-owned result renderers. */
+  details?: unknown;
   synthetic?: boolean;
 }
 
@@ -303,6 +321,8 @@ export type TUIStartupState = 'pending' | 'ready' | 'picker';
 export interface KimiTUIOptions {
   initialAppState: AppState;
   startup: TUIStartupOptions;
+  /** Optional Pi-style call/result render definitions supplied by the host. */
+  toolDefinitions?: ToolRenderDefinitions;
 }
 
 export interface PendingExit {

@@ -24,7 +24,12 @@ import {
   writeSummary,
 } from './summary';
 import { renderTruncated } from './truncated';
-import type { ResultRenderer } from './types';
+import type {
+  AnyToolRenderDefinition,
+  ResultRenderer,
+  ToolRenderDefinition,
+  ToolRenderDefinitions,
+} from './types';
 
 /**
  * True when a tool has no dedicated renderer and falls back to the generic
@@ -68,4 +73,96 @@ export function pickResultRenderer(toolName: string): ResultRenderer {
   }
 }
 
-export type { ResultRenderer } from './types';
+/**
+ * A small host-side registry for tool-owned render definitions.
+ *
+ * The execution engine owns tool implementations, while this registry owns
+ * the optional pi-tui-facing part of a definition. Keeping the registry in
+ * the TUI package means tool implementations and wire consumers do not need a
+ * dependency on a terminal renderer.
+ */
+export class ToolRenderDefinitionRegistry {
+  private readonly definitions = new Map<string, AnyToolRenderDefinition>();
+
+  constructor(definitions: ToolRenderDefinitions = []) {
+    this.replace(definitions);
+  }
+
+  replace(definitions: ToolRenderDefinitions): void {
+    this.definitions.clear();
+    for (const definition of definitionsToArray(definitions)) {
+      if (definition.name.length > 0) this.definitions.set(definition.name, definition);
+    }
+  }
+
+  register<TArgs extends object, TState>(
+    definition: ToolRenderDefinition<TArgs, TState>,
+  ): () => void {
+    const name = definition.name;
+    const previous = this.definitions.get(name);
+    this.definitions.set(name, definition);
+    return () => {
+      if (this.definitions.get(name) !== definition) return;
+      if (previous === undefined) this.definitions.delete(name);
+      else this.definitions.set(name, previous);
+    };
+  }
+
+  unregister(name: string): boolean {
+    return this.definitions.delete(name);
+  }
+
+  resolve(name: string): AnyToolRenderDefinition | undefined {
+    return this.definitions.get(name);
+  }
+
+  entries(): readonly AnyToolRenderDefinition[] {
+    return [...this.definitions.values()];
+  }
+}
+
+function definitionsToArray(
+  definitions: ToolRenderDefinitions,
+): readonly AnyToolRenderDefinition[] {
+  if (Array.isArray(definitions)) return definitions;
+  if (definitions instanceof Map) return [...definitions.values()];
+  return Object.values(definitions);
+}
+
+/** Process-wide opt-in registry used by direct ToolCallComponent consumers. */
+const defaultToolRenderDefinitions = new ToolRenderDefinitionRegistry();
+
+export function registerToolRenderDefinition<TArgs extends object, TState>(
+  definition: ToolRenderDefinition<TArgs, TState>,
+): () => void {
+  return defaultToolRenderDefinitions.register(definition);
+}
+
+export function resolveToolRenderDefinition(
+  toolName: string,
+): AnyToolRenderDefinition | undefined {
+  return defaultToolRenderDefinitions.resolve(toolName);
+}
+
+export function unregisterToolRenderDefinition(toolName: string): boolean {
+  return defaultToolRenderDefinitions.unregister(toolName);
+}
+
+/** Backwards-friendly aliases for hosts that call these simply "tool definitions". */
+export const registerToolDefinition = registerToolRenderDefinition;
+export const resolveToolDefinition = resolveToolRenderDefinition;
+export const unregisterToolDefinition = unregisterToolRenderDefinition;
+
+export type {
+  AnyToolRenderDefinition,
+  ResultRenderer,
+  ToolCallRenderer,
+  ToolDefinition,
+  ToolRenderContext,
+  ToolRenderDefinition,
+  ToolRenderDefinitions,
+  ToolRenderResultOptions,
+  ToolRendererDefinition,
+  ToolRenderShell,
+  ToolResultRenderer,
+} from './types';

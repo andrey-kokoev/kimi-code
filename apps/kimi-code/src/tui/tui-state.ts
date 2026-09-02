@@ -22,6 +22,7 @@ import type { TasksBrowserState } from './controllers/tasks-browser';
 import { currentTheme, type Theme } from './theme';
 import { setMarkdownRenderLatex } from './utils/markdown-options';
 import { createTerminalState, type TerminalState } from './utils/terminal-state';
+import type { ToolRenderDefinition } from './components/messages/tool-renderers/types';
 import {
   INITIAL_LIVE_PANE,
   type AppState,
@@ -58,6 +59,8 @@ export interface TUIState {
   terminalState: TerminalState;
   activitySpinner: { instance: MoonLoader; style: SpinnerStyle } | null;
   toolOutputExpanded: boolean;
+  /** Optional tool-owned TUI renderers keyed by the tool's exact name. */
+  toolRenderDefinitions?: ReadonlyMap<string, ToolRenderDefinition>;
   sessions: SessionRow[];
   loadingSessions: boolean;
   /** Keyset cursor for the next older page; `undefined` when the listing is exhausted. */
@@ -77,6 +80,24 @@ export interface TUIState {
    */
   queuedMessageDispatchPending: boolean;
   swarmModeEntry: 'manual' | 'task' | undefined;
+}
+
+function createToolRenderDefinitionMap(
+  definitions: KimiTUIOptions['toolDefinitions'],
+): ReadonlyMap<string, ToolRenderDefinition> {
+  const entries =
+    definitions === undefined
+      ? []
+      : Array.isArray(definitions)
+        ? definitions
+        : definitions instanceof Map
+          ? [...definitions.values()]
+          : Object.values(definitions);
+  return new Map(
+    entries
+      .filter((definition) => definition.name.length > 0)
+      .map((definition) => [definition.name, definition] as const),
+  );
 }
 
 export function createTUIState(options: KimiTUIOptions): TUIState {
@@ -173,6 +194,7 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
     terminalState: createTerminalState(),
     activitySpinner: null,
     toolOutputExpanded: false,
+    toolRenderDefinitions: createToolRenderDefinitionMap(options.toolDefinitions),
     sessions: [],
     loadingSessions: false,
     sessionsNextCursor: undefined,

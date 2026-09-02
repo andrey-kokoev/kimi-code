@@ -7,6 +7,7 @@ import { CompactionComponent } from '../components/dialogs/compaction';
 import { ReadGroupComponent } from '../components/messages/read-group';
 import { ThinkingComponent } from '../components/messages/thinking';
 import { ToolCallComponent } from '../components/messages/tool-call';
+import { resolveToolRenderDefinition } from '../components/messages/tool-renderers/registry';
 import { STREAMING_UI_FLUSH_MS } from '../constant/streaming';
 import { hasDispose } from '../utils/component-capabilities';
 import { appendStreamingArgsPreview, parseStreamingArgs } from '../utils/event-payload';
@@ -667,6 +668,7 @@ export class StreamingUIController {
       undefined,
       state.ui,
       state.appState.workDir,
+      state.toolRenderDefinitions?.get(toolCall.name),
     );
     if (state.toolOutputExpanded) tc.setExpanded(true);
     this._pendingToolComponents.set(toolCall.id, tc);
@@ -712,6 +714,7 @@ export class StreamingUIController {
         result,
         state.ui,
         state.appState.workDir,
+        state.toolRenderDefinitions?.get(matchedCall.name),
       );
       if (state.toolOutputExpanded) completed.setExpanded(true);
       state.transcriptContainer.addChild(completed);
@@ -797,6 +800,12 @@ export class StreamingUIController {
       this._pendingAgentGroup = null;
       return false;
     }
+    // A tool-owned renderer needs the actual ToolCallComponent; grouping
+    // borrows it as a hidden state container and would hide its custom shell.
+    if (this.hasToolOwnedRenderer('Agent')) {
+      this._pendingAgentGroup = null;
+      return false;
+    }
 
     const step = toolCall.step ?? this._currentStep;
     const turnId = toolCall.turnId ?? this._currentTurnId;
@@ -833,6 +842,16 @@ export class StreamingUIController {
     return true;
   }
 
+  private hasToolOwnedRenderer(toolName: string): boolean {
+    const definition =
+      this.host.state.toolRenderDefinitions?.get(toolName) ?? resolveToolRenderDefinition(toolName);
+    return (
+      definition?.renderShell === 'self' ||
+      definition?.renderCall !== undefined ||
+      definition?.renderResult !== undefined
+    );
+  }
+
   private upgradeSoloAgentToGroup(solo: ToolCallComponent): AgentGroupComponent {
     const { state } = this.host;
     const group = new AgentGroupComponent(state.ui);
@@ -852,6 +871,11 @@ export class StreamingUIController {
   private tryAttachReadToolCall(toolCall: ToolCallBlockData, tc: ToolCallComponent): boolean {
     const { state } = this.host;
     if (toolCall.name !== 'Read') {
+      this._pendingReadGroup = null;
+      return false;
+    }
+    // Do not hide a custom call/result renderer inside the Read group row.
+    if (this.hasToolOwnedRenderer('Read')) {
       this._pendingReadGroup = null;
       return false;
     }

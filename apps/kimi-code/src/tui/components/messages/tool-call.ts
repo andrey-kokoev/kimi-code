@@ -35,7 +35,17 @@ import { PlanBoxComponent } from './plan-box';
 import { ShellExecutionComponent } from './shell-execution';
 import { countNonEmptyLines, pickChip } from './tool-renderers/chip';
 import { buildGoalToolHeader } from './tool-renderers/goal';
-import { isGenericToolResult, pickResultRenderer } from './tool-renderers/registry';
+import {
+  isGenericToolResult,
+  pickResultRenderer,
+  resolveToolRenderDefinition,
+} from './tool-renderers/registry';
+import type {
+  AnyToolRenderDefinition,
+  ToolRenderContext,
+  ToolRenderResultOptions,
+} from './tool-renderers/types';
+import { renderTruncated } from './tool-renderers/truncated';
 
 const MAX_ARG_LENGTH = 60;
 const MAX_SUB_TOOL_CALLS_SHOWN = 4;
@@ -481,6 +491,14 @@ function tailNonEmptyLines(text: string, maxLines: number): string[] {
     .slice(-maxLines);
 }
 
+function isRenderableComponent(value: unknown): value is Component {
+  return (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as { render?: unknown }).render === 'function'
+  );
+}
+
 class PrefixedWrappedLine implements Component {
   private renderCache: { width: number; lines: string[] } | undefined;
 
@@ -541,6 +559,16 @@ export class ToolCallComponent extends Container {
   private readonly markdownTheme = createMarkdownTheme();
   private result: ToolResultBlockData | undefined;
   private ui: TUI | undefined;
+  private readonly workspaceDir: string | undefined;
+  private readonly toolDefinition: AnyToolRenderDefinition | undefined;
+  private readonly selfRenderContainer = new Container();
+  private readonly rendererState: Record<string, unknown> = {};
+  private callRendererComponent: Component | undefined;
+  private resultRendererComponent: Component | undefined;
+  /** Mirrors Pi's lifecycle flag: pending calls are partial until a result lands. */
+  private rendererIsPartial: boolean;
+  /** Streaming previews have not started execution yet; finalized calls have. */
+  private rendererExecutionStarted: boolean;
   private planPath: string | undefined;
   /**
    * Fallback plan body used when the LLM uses plan-file mode and
@@ -644,23 +672,51 @@ export class ToolCallComponent extends Container {
     toolCall: ToolCallBlockData,
     result: ToolResultBlockData | undefined,
     ui?: TUI,
-    private readonly workspaceDir?: string,
+    workspaceDir?: string,
+    toolDefinition?: AnyToolRenderDefinition,
+  );
+  constructor(
+    toolCall: ToolCallBlockData,
+    result: ToolResultBlockData | undefined,
+    ui?: TUI,
+    toolDefinition?: AnyToolRenderDefinition,
+  );
+  constructor(
+    toolCall: ToolCallBlockData,
+    result: ToolResultBlockData | undefined,
+    ui?: TUI,
+    workspaceDirOrDefinition?: string | AnyToolRenderDefinition,
+    toolDefinition?: AnyToolRenderDefinition,
   ) {
     super();
     this.toolCall = toolCall;
     this.result = result;
+    this.rendererIsPartial = result === undefined;
+    this.rendererExecutionStarted =
+      result !== undefined || toolCall.streamingArguments === undefined;
     this.ui = ui;
+    this.workspaceDir =
+      typeof workspaceDirOrDefinition === 'string' ? workspaceDirOrDefinition : undefined;
+    this.toolDefinition =
+      toolDefinition ??
+      (typeof workspaceDirOrDefinition === 'string' ? undefined : workspaceDirOrDefinition) ??
+      resolveToolRenderDefinition(toolCall.name);
     this.applySubagentReplay(toolCall.subagent);
 
     this.addChild(new Spacer(1));
     this.headerText = new Text(this.buildHeader(), 0, 0);
     this.addChild(this.headerText);
-    this.buildCallPreview();
-    this.callPreviewEndIndex = this.children.length;
-    this.buildProgressBlock();
-    this.buildLiveOutputBlock();
-    this.buildContent();
-    this.buildSubagentBlock();
+    if (this.isSelfRenderShell()) {
+      this.addChild(this.selfRenderContainer);
+      this.buildSelfRender();
+    } else {
+      this.buildCallPreview();
+      this.callPreviewEndIndex = this.children.length;
+      this.buildProgressBlock();
+      this.buildLiveOutputBlock();
+      this.buildContent();
+      this.buildSubagentBlock();
+    }
     this.syncStreamingProgressTimer();
     this.syncSubagentElapsedTimer();
     this.startDetachHintTimer();
@@ -671,6 +727,14 @@ export class ToolCallComponent extends Container {
     | undefined;
 
   override render(width: number): string[] {
+    if (this.isSelfRenderShell()) {
+      const contentLines = this.selfRenderContainer.render(width);
+      if (contentLines.length === 0) return [];
+      // Keep the transcript's normal breathing room while leaving all
+      // framing, title, and result presentation to the tool renderer.
+      return ['', ...contentLines];
+    }
+
     const cache = this.renderCache;
     const cacheValid =
       isRenderCacheEnabled() &&
@@ -727,6 +791,8 @@ export class ToolCallComponent extends Container {
 
   setResult(result: ToolResultBlockData): void {
     this.result = result;
+    this.rendererIsPartial = false;
+    this.rendererExecutionStarted = true;
     // Result supersedes any live progress chatter; the result body is the
     // authoritative final state. Without this clear, a finished tool would
     // show both the streamed status lines and the final output stacked.
@@ -749,6 +815,8 @@ export class ToolCallComponent extends Container {
 
   updateToolCall(toolCall: ToolCallBlockData): void {
     this.toolCall = toolCall;
+    this.rendererExecutionStarted =
+      this.result !== undefined || toolCall.streamingArguments === undefined;
     this.syncStreamingProgressTimer();
     this.headerText.setText(this.buildHeader());
     this.rebuildBody();
@@ -1532,7 +1600,108 @@ export class ToolCallComponent extends Container {
     return currentTheme.dim(` · ${text}`);
   }
 
+  private isSelfRenderShell(): boolean {
+    return this.toolDefinition?.renderShell === 'self';
+  }
+
+  private isArgsComplete(): boolean {
+    return this.toolCall.streamingArguments === undefined && this.toolCall.truncated !== true;
+  }
+
+  private createToolRenderContext(
+    lastComponent: Component | undefined,
+  ): ToolRenderContext {
+    return {
+      args: this.toolCall.args,
+      toolCallId: this.toolCall.id,
+      invalidate: () => {
+        this.invalidate();
+        this.ui?.requestRender();
+      },
+      lastComponent,
+      state: this.rendererState,
+      cwd: this.workspaceDir ?? '',
+      executionStarted: this.rendererExecutionStarted,
+      argsComplete: this.isArgsComplete(),
+      isPartial: this.rendererIsPartial,
+      expanded: this.expanded,
+      showImages: true,
+      isError: this.result?.is_error === true,
+    };
+  }
+
+  private createToolRenderCallFallback(): Component {
+    return new Text(currentTheme.boldFg('primary', this.toolCall.name), 0, 0);
+  }
+
+  private createToolRenderResultFallback(): Component[] {
+    if (this.result === undefined) return [];
+    return renderTruncated(this.toolCall, this.result, { expanded: this.expanded });
+  }
+
+  private tryBuildCustomCallRenderer(): Component | undefined {
+    const renderer = this.toolDefinition?.renderCall;
+    if (renderer === undefined) return undefined;
+    try {
+      const component = renderer(
+        this.toolCall.args,
+        currentTheme,
+        this.createToolRenderContext(this.callRendererComponent),
+      );
+      if (!isRenderableComponent(component)) throw new TypeError('Tool call renderer returned no component');
+      this.callRendererComponent = component;
+      return component;
+    } catch {
+      this.callRendererComponent = undefined;
+      return undefined;
+    }
+  }
+
+  private tryBuildCustomResultRenderer(): Component | undefined {
+    const renderer = this.toolDefinition?.renderResult;
+    if (renderer === undefined || this.result === undefined) return undefined;
+    const options: ToolRenderResultOptions = {
+      expanded: this.expanded,
+      isPartial: this.rendererIsPartial,
+    };
+    try {
+      const component = renderer(
+        this.result,
+        options,
+        currentTheme,
+        this.createToolRenderContext(this.resultRendererComponent),
+      );
+      if (!isRenderableComponent(component)) throw new TypeError('Tool result renderer returned no component');
+      this.resultRendererComponent = component;
+      return component;
+    } catch {
+      this.resultRendererComponent = undefined;
+      return undefined;
+    }
+  }
+
+  private buildSelfRender(): void {
+    this.selfRenderContainer.clear();
+
+    const call = this.tryBuildCustomCallRenderer() ?? this.createToolRenderCallFallback();
+    this.selfRenderContainer.addChild(call);
+
+    if (this.result === undefined) return;
+    const result = this.tryBuildCustomResultRenderer();
+    if (result !== undefined) {
+      this.selfRenderContainer.addChild(result);
+      return;
+    }
+    for (const fallback of this.createToolRenderResultFallback()) {
+      this.selfRenderContainer.addChild(fallback);
+    }
+  }
+
   private rebuildContent(): void {
+    if (this.isSelfRenderShell()) {
+      this.buildSelfRender();
+      return;
+    }
     while (this.children.length > this.callPreviewEndIndex) {
       this.children.pop();
     }
@@ -1544,6 +1713,10 @@ export class ToolCallComponent extends Container {
   }
 
   private rebuildBody(): void {
+    if (this.isSelfRenderShell()) {
+      this.buildSelfRender();
+      return;
+    }
     while (this.children.length > 2) {
       this.children.pop();
     }
@@ -1954,6 +2127,12 @@ export class ToolCallComponent extends Container {
   }
 
   private buildCallPreview(): void {
+    const customCall = this.tryBuildCustomCallRenderer();
+    if (customCall !== undefined) {
+      this.addChild(customCall);
+      return;
+    }
+
     const name = this.toolCall.name;
     if (name === 'ExitPlanMode') {
       this.buildPlanPreview();
@@ -2156,6 +2335,12 @@ export class ToolCallComponent extends Container {
   private buildContent(): void {
     const { result } = this;
     if (result === undefined) return;
+
+    const customResult = this.tryBuildCustomResultRenderer();
+    if (customResult !== undefined) {
+      this.addChild(customResult);
+      return;
+    }
 
     if (this.toolCall.name === 'AgentSwarm') {
       this.buildAgentSwarmResultSummary(result);
