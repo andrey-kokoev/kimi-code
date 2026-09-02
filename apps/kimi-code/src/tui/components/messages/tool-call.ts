@@ -45,7 +45,6 @@ import type {
   ToolRenderContext,
   ToolRenderResultOptions,
 } from './tool-renderers/types';
-import { renderTruncated } from './tool-renderers/truncated';
 
 const MAX_ARG_LENGTH = 60;
 const MAX_SUB_TOOL_CALLS_SHOWN = 4;
@@ -1674,7 +1673,9 @@ export class ToolCallComponent extends Container {
   private createToolRenderResultFallback(): Component[] {
     const result = this.currentRendererResult();
     if (result === undefined) return [];
-    return renderTruncated(this.toolCall, result, { expanded: this.expanded });
+    return pickResultRenderer(this.toolCall.name)(this.toolCall, result, {
+      expanded: this.expanded,
+    });
   }
 
   private tryBuildCustomCallRenderer(): Component | undefined {
