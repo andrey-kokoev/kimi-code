@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import { Text } from '@moonshot-ai/pi-tui';
 import type {
   AgentReplayRecord,
   BackgroundTaskInfo,
@@ -27,6 +28,7 @@ import { ToolCallComponent } from '#/tui/components/messages/tool-call';
 import { ReadGroupComponent } from '#/tui/components/messages/read-group';
 import { replayBackgroundProjection } from '#/tui/utils/message-replay';
 import type { TaskNotificationOrigin } from '#/tui/utils/message-replay';
+import type { ToolRenderDefinition } from '#/tui/types';
 
 vi.mock('#/utils/open-url', () => ({ openUrl: vi.fn() }));
 
@@ -46,7 +48,9 @@ interface ReplayDriver {
   switchToSession(session: Session, statusMessage: string): Promise<void>;
 }
 
-function makeStartupInput(): KimiTUIStartupInput {
+function makeStartupInput(
+  toolDefinitions?: KimiTUIStartupInput['toolDefinitions'],
+): KimiTUIStartupInput {
   return {
     cliOptions: {
       session: undefined,
@@ -71,6 +75,7 @@ function makeStartupInput(): KimiTUIStartupInput {
     },
     version: '0.0.0-test',
     workDir: '/tmp/proj-a',
+    ...(toolDefinitions === undefined ? {} : { toolDefinitions }),
   };
 }
 
@@ -82,6 +87,7 @@ function message(
     readonly toolCallId?: string;
     readonly origin?: PromptOrigin | TaskNotificationOrigin;
     readonly isError?: boolean;
+    readonly details?: unknown;
   } = {},
 ): AgentReplayRecord {
   return {
@@ -94,6 +100,7 @@ function message(
       toolCallId: extra.toolCallId,
       origin: extra.origin as PromptOrigin | undefined,
       isError: extra.isError,
+      ...(extra.details !== undefined ? { details: extra.details } : {}),
     },
   };
 }
@@ -248,10 +255,13 @@ function makeHarness(initialSession: Session) {
   };
 }
 
-async function makeDriver(initialSession: Session): Promise<ReplayDriver> {
+async function makeDriver(
+  initialSession: Session,
+  startupInput: KimiTUIStartupInput = makeStartupInput(),
+): Promise<ReplayDriver> {
   const driver = new KimiTUI(
     makeHarness(initialSession) as never,
-    makeStartupInput(),
+    startupInput,
   ) as unknown as ReplayDriver;
   vi.spyOn(driver.state.ui, 'requestRender').mockImplementation(() => {});
   vi.spyOn(driver.state.terminal, 'setProgress').mockImplementation(() => {});
@@ -262,10 +272,11 @@ async function makeDriver(initialSession: Session): Promise<ReplayDriver> {
 async function replayIntoDriver(
   replay: readonly AgentReplayRecord[],
   overrides: Partial<ResumedAgentState> = {},
+  startupInput: KimiTUIStartupInput = makeStartupInput(),
 ): Promise<ReplayDriver> {
   const initial = makeSession([]);
   const resumed = makeSession(replay, overrides);
-  const driver = await makeDriver(initial);
+  const driver = await makeDriver(initial, startupInput);
   await driver.switchToSession(resumed, 'Resumed session (ses-replay).');
   return driver;
 }
@@ -301,6 +312,46 @@ function backgroundTask(
 }
 
 describe('KimiTUI resume message replay', () => {
+  it('passes replayed structured details to a custom renderer instead of the generic fallback', async () => {
+    const details = { kind: 'rows', rows: [{ id: 1, label: 'Moon' }] };
+    const receivedDetails: unknown[] = [];
+    const definition: ToolRenderDefinition = {
+      name: 'StructuredTool',
+      renderShell: 'self',
+      renderResult: (result) => {
+        receivedDetails.push(result.details);
+        const detail = result.details;
+        const rowCount =
+          detail !== null &&
+          typeof detail === 'object' &&
+          'rows' in detail &&
+          Array.isArray(detail.rows)
+            ? detail.rows.length
+            : 0;
+        return new Text(`replayed rows=${String(rowCount)}`, 0, 0);
+      },
+    };
+    const driver = await replayIntoDriver(
+      [
+        message('user', [{ type: 'text', text: 'Find the moon.' }]),
+        message('assistant', [], {
+          toolCalls: [toolCall('call-structured', 'StructuredTool', { query: 'moon' })],
+        }),
+        message('tool', [{ type: 'text', text: 'replayed output' }], {
+          toolCallId: 'call-structured',
+          details,
+        }),
+      ],
+      {},
+      makeStartupInput([definition]),
+    );
+
+    const transcript = stripAnsi(driver.state.transcriptContainer.render(140).join('\n'));
+    expect(receivedDetails.at(-1)).toEqual(details);
+    expect(transcript).toContain('replayed rows=1');
+    expect(transcript).not.toContain('replayed output');
+  });
+
   it('does not render legacy goal completion context reminders as transcript messages', async () => {
     const driver = await replayIntoDriver([
       message(

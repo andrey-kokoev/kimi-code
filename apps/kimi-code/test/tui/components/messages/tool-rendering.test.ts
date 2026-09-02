@@ -228,6 +228,45 @@ describe('tool-owned transcript rendering', () => {
     expect(registry.resolve('PriorityTool')).toBe(startup);
   });
 
+  it('supports runtime replacement and ignores empty tool names', () => {
+    const registry = new ToolRenderDefinitionRegistry();
+    const emptyDispose = registry.register({
+      name: '',
+      renderCall: () => new Text('should not render', 0, 0),
+    });
+    expect(registry.resolve('')).toBeUndefined();
+
+    const first: ToolRenderDefinition = {
+      name: 'RuntimeTool',
+      renderCall: () => new Text('first', 0, 0),
+    };
+    const disposeFirst = registry.register(first);
+    expect(registry.resolve('RuntimeTool')).toBe(first);
+
+    const replacement: ToolRenderDefinition = {
+      name: 'RuntimeTool',
+      renderCall: () => new Text('replacement', 0, 0),
+    };
+    const disposeReplacement = registry.register(replacement);
+    expect(registry.resolve('RuntimeTool')).toBe(replacement);
+    disposeReplacement();
+    expect(registry.resolve('RuntimeTool')).toBe(first);
+    disposeFirst();
+    expect(registry.resolve('RuntimeTool')).toBeUndefined();
+
+    const startup: ToolRenderDefinition = {
+      name: 'RuntimeTool',
+      renderCall: () => new Text('startup', 0, 0),
+    };
+    registry.replace([startup]);
+    expect(registry.resolve('RuntimeTool')).toBe(startup);
+    expect(registry.unregister('RuntimeTool')).toBe(true);
+    expect(registry.resolve('RuntimeTool')).toBeUndefined();
+    expect(registry.unregister('RuntimeTool')).toBe(false);
+
+    emptyDispose();
+  });
+
   it('keeps the existing shell when renderShell is omitted', () => {
     const definition: ToolRenderDefinition = {
       name: 'DefaultShell',

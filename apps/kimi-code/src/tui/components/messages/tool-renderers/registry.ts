@@ -106,7 +106,9 @@ export class ToolRenderDefinitionRegistry {
     definition: ToolRenderDefinition<TArgs, TState>,
   ): () => void {
     const name = definition.name;
-    if (this.explicitNames.has(name)) return () => {};
+    // Keep runtime registration consistent with replace(): an empty name is
+    // not a resolvable tool definition and must never enter the registry.
+    if (name.length === 0 || this.explicitNames.has(name)) return () => {};
     const previous = this.definitions.get(name);
     this.definitions.set(name, definition);
     return () => {

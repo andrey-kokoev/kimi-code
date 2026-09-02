@@ -118,6 +118,27 @@ describe('runTurn — tool-call behaviour', () => {
     expect(result?.note).toBe('<system>meta for the model</system>');
   });
 
+  it('preserves structured result details through execution, live events, and the wire record', async () => {
+    const details = { kind: 'rows', rows: [{ id: 1, label: 'Moon' }] };
+    const blocks = new ContentBlocksTool({ output: 'payload', details });
+    const { sink, context } = await runTurn({
+      tools: [blocks],
+      responses: [
+        makeToolUseResponse([makeToolCall('blocks', {}, 'tc-details')]),
+        makeEndTurnResponse('done'),
+      ],
+    });
+
+    expect(sink.byType('tool.result')[0]?.result).toMatchObject({
+      output: 'payload',
+      details,
+    });
+    expect(context.toolResults()[0]?.result).toMatchObject({
+      output: 'payload',
+      details,
+    });
+  });
+
   it('enforces the note contract (string | undefined) at the normalization boundary', async () => {
     // Tools are arbitrary JS: a malformed note (null, number, object, empty
     // string) must never reach the record — everything downstream (history,

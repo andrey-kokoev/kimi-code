@@ -15,6 +15,11 @@ import { join } from 'node:path';
 import {
   IAgentContextMemoryService,
   IAgentLifecycleService,
+  IAgentLoopService,
+  IAgentPermissionModeService,
+  IAgentProfileService,
+  IAgentPromptService,
+  IAgentToolRegistryService,
   IWireService,
   IEventBus,
   ISessionInteractionService,
@@ -25,6 +30,10 @@ import {
   IModelCatalog,
   type ContextMessage,
   type DomainEvent,
+  type ExecutableTool,
+  type Model,
+  type ModelRequestEvent,
+  type ModelRequester,
   type ScopeSeed,
 } from '@moonshot-ai/agent-core-v2';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -119,40 +128,106 @@ function serverEvent(payload: Record<string, unknown>): DomainEvent {
   return payload as unknown as DomainEvent;
 }
 
+function transcriptTestModelCatalog(
+  nextResponse: () => ModelRequestEvent,
+): IModelCatalog {
+  const capabilities = {
+    image_in: false,
+    video_in: false,
+    audio_in: false,
+    thinking: false,
+    tool_use: true,
+    max_context_tokens: 1_000_000,
+  } as const;
+  const model: Model = {
+    id: 'transcript-test-model',
+    name: 'transcript-test-model',
+    aliases: [],
+    protocol: 'openai',
+    baseUrl: 'https://example.test',
+    headers: {},
+    capabilities,
+    maxContextSize: capabilities.max_context_tokens,
+    alwaysThinking: false,
+    providerName: 'transcript-test-provider',
+    authProvider: { getAuth: async () => ({ apiKey: 'test-key' }) },
+  };
+  const requester: ModelRequester = {
+    model,
+    request: async function* () {
+      yield nextResponse();
+    },
+  };
+  return {
+    _serviceBrand: undefined,
+    get: (id) => {
+      if (id === model.id) return model;
+      throw new Error(`unknown test model: ${id}`);
+    },
+    getRequester: (id) => {
+      if (id === model.id) return requester;
+      throw new Error(`unknown test model: ${id}`);
+    },
+    inspect: () => {
+      throw new Error('modelCatalog.inspect not exercised in this test');
+    },
+    ping: async () => ({ ok: true, durationMs: 0 }),
+    findByName: (name) => (name === model.name ? [model.id] : []),
+    listModels: async () => [],
+    listProviders: async () => [],
+    getProvider: async () => {
+      throw new Error('modelCatalog.getProvider not exercised in this test');
+    },
+    setDefaultModel: async () => {
+      throw new Error('modelCatalog.setDefaultModel not exercised in this test');
+    },
+  };
+}
+
 describe('server-v2 /api/v1/sessions/{sid}/transcript', () => {
   let server: RunningServer | undefined;
   let home: string | undefined;
   let base: string;
   let seeds: ScopeSeed | undefined;
+  let transcriptModelRequests = 0;
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'kimi-server-v2-transcript-'));
-    // Seed a stub IModelCatalog so the agent scope can instantiate if a
-    // transitive service needs it; the transcript route itself does not.
-    const modelCatalog: IModelCatalog = {
-      _serviceBrand: undefined,
-      get: () => {
-        throw new Error('modelCatalog.get not exercised in this test');
-      },
-      getRequester: () => {
-        throw new Error('modelCatalog.getRequester not exercised in this test');
-      },
-      inspect: () => {
-        throw new Error('modelCatalog.inspect not exercised in this test');
-      },
-      ping: () => {
-        throw new Error('modelCatalog.ping not exercised in this test');
-      },
-      findByName: () => [],
-      listModels: async () => [],
-      listProviders: async () => [],
-      getProvider: async () => {
-        throw new Error('modelCatalog.getProvider not exercised in this test');
-      },
-      setDefaultModel: async () => {
-        throw new Error('modelCatalog.setDefaultModel not exercised in this test');
-      },
-    };
+    transcriptModelRequests = 0;
+    const modelCatalog = transcriptTestModelCatalog(() => {
+      transcriptModelRequests += 1;
+      if (transcriptModelRequests === 1) {
+        return {
+          type: 'finish',
+          message: {
+            role: 'assistant',
+            content: [],
+            toolCalls: [
+              {
+                type: 'function',
+                id: 'call-live-details',
+                name: 'StructuredRows',
+                arguments: '{}',
+              },
+            ],
+          },
+          providerFinishReason: 'tool_calls',
+          rawFinishReason: 'tool_calls',
+          id: 'response-tool',
+        } satisfies ModelRequestEvent;
+      }
+      return {
+        type: 'finish',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'done' }],
+          toolCalls: [],
+        },
+        providerFinishReason: 'completed',
+        rawFinishReason: 'stop',
+        id: 'response-done',
+      } satisfies ModelRequestEvent;
+    });
     seeds = [[IModelCatalog, modelCatalog]];
     await boot();
   });
@@ -251,7 +326,15 @@ describe('server-v2 /api/v1/sessions/{sid}/transcript', () => {
         args: { command: 'ls' },
       }),
     );
-    bus.publish(serverEvent({ type: 'tool.result', turnId: 1, toolCallId: 'call_1', output: 'a.txt' }));
+    bus.publish(
+      serverEvent({
+        type: 'tool.result',
+        turnId: 1,
+        toolCallId: 'call_1',
+        output: 'a.txt',
+        details: { kind: 'rows', rows: [{ id: 1 }] },
+      }),
+    );
     bus.publish(serverEvent({ type: 'turn.step.completed', turnId: 1, step: 1 }));
     bus.publish(serverEvent({ type: 'turn.ended', turnId: 1, reason: 'completed' }));
 
@@ -275,6 +358,7 @@ describe('server-v2 /api/v1/sessions/{sid}/transcript', () => {
         toolCallId: 'call_1',
         state: 'done',
         output: 'a.txt',
+        details: { kind: 'rows', rows: [{ id: 1 }] },
       }),
     );
     // Roster descriptor for the main agent is present.
@@ -373,53 +457,88 @@ describe('server-v2 /api/v1/sessions/{sid}/transcript', () => {
     expect(unknown.body.data.items).toEqual([]);
   });
 
-  it('rebuilds the main agent for a cold session from the wire records', async () => {
+  it('rebuilds the cold transcript from the same live execution after a reboot', async () => {
     const id = await createSession();
     await ensureMainAgent(id);
-    await seedMainAgentMessages(id, [
-      { role: 'user', content: [{ type: 'text', text: 'hi' }], toolCalls: [] },
-      {
-        role: 'assistant',
-        content: [{ type: 'text', text: 'running' }],
-        toolCalls: [{ type: 'function', id: 'call_1', name: 'Bash', arguments: '{"cmd":"ls"}' }],
-      },
-      {
-        role: 'tool',
-        content: [{ type: 'text', text: 'file.txt' }],
-        toolCalls: [],
-        toolCallId: 'call_1',
-      },
-    ]);
+    const session = getLiveSessionById(server!.core.accessor, id);
+    const agent = session!.accessor.get(IAgentLifecycleService).get('main');
+    if (agent === undefined) throw new Error('main agent was not created');
 
-    // Reboot on the same home — the session drops out of memory.
+    const details = { kind: 'rows', rows: [{ id: 1, label: 'Moon' }] };
+    const tool: ExecutableTool = {
+      name: 'StructuredRows',
+      description: 'Returns structured rows.',
+      parameters: { type: 'object', properties: {} },
+      resolveExecution: () => ({
+        approvalRule: 'StructuredRows',
+        execute: async () => ({ output: 'live output', details }),
+      }),
+    };
+    agent.accessor.get(IAgentToolRegistryService).register(tool, { source: 'builtin' });
+    await agent.accessor.get(IAgentProfileService).bind({
+      profile: 'agent',
+      model: 'transcript-test-model',
+    });
+    agent.accessor.get(IAgentProfileService).update({ activeToolNames: [tool.name] });
+    agent.accessor.get(IAgentPermissionModeService).setMode('yolo');
+
+    // Bind the live projector before the execution so the result below is
+    // observed as a live event, not merely reconstructed from the wire.
+    const initial = await getJson<TranscriptContract>(
+      `/api/v1/sessions/${id}/transcript?agent_id=main`,
+    );
+    expect(initial.body.data.items).toEqual([]);
+
+    const prompt = await agent.accessor.get(IAgentPromptService).submit({
+      input: [{ type: 'text', text: 'Find the moon.' }],
+    });
+    expect(prompt).toMatchObject({ turn_id: expect.any(Number) });
+    await agent.accessor.get(IAgentLoopService).settled();
+    expect(transcriptModelRequests).toBe(2);
+
+    const live = await getJson<TranscriptContract>(
+      `/api/v1/sessions/${id}/transcript?agent_id=main`,
+    );
+    expect(live.body.code).toBe(0);
+    const liveTurn = live.body.data.items.find(
+      (item): item is TurnContract => item.kind === 'turn' && item.turnId === 't0',
+    );
+    expect(liveTurn).toBeDefined();
+    const liveTool = liveTurn!.steps[0]!.frames.find(
+      (frame) => frame.kind === 'tool' && frame.toolCallId === 'call-live-details',
+    );
+    expect(liveTool).toEqual(
+      expect.objectContaining({
+        state: 'done',
+        output: 'live output',
+        details,
+      }),
+    );
+
+    // Reboot on the same home and read the same turn from the cold wire path.
     await server!.close();
     server = undefined;
     await boot();
 
-    const { body } = await getJson<TranscriptContract>(
+    const cold = await getJson<TranscriptContract>(
       `/api/v1/sessions/${id}/transcript?agent_id=main`,
     );
-    expect(body.code).toBe(0);
-    expect(body.data.has_more).toBe(false);
-    expect(body.data.agents).toEqual([{ agentId: 'main', type: 'main' }]);
-    expect(body.data.pending_interactions).toEqual([]);
-
-    const turn = body.data.items.find(
+    expect(cold.body.code).toBe(0);
+    const coldTurn = cold.body.data.items.find(
       (item): item is TurnContract => item.kind === 'turn' && item.turnId === 't0',
     );
-    expect(turn).toBeDefined();
-    expect(turn!.state).toBe('completed');
-    expect(turn!.prompt).toBe('hi');
-    const frames = turn!.steps[0]!.frames;
-    expect(frames).toContainEqual(expect.objectContaining({ kind: 'text', text: 'running' }));
-    expect(frames).toContainEqual(
+    expect(coldTurn).toBeDefined();
+    const coldTool = coldTurn!.steps[0]!.frames.find(
+      (frame) => frame.kind === 'tool' && frame.toolCallId === 'call-live-details',
+    );
+    expect(coldTool).toEqual(
       expect.objectContaining({
-        kind: 'tool',
-        toolCallId: 'call_1',
         state: 'done',
-        output: 'file.txt',
+        output: 'live output',
+        details,
       }),
     );
+    expect(coldTool).toEqual(liveTool);
 
     // Cold reads of an agent without any records page empty.
     const sub = await getJson<TranscriptContract>(`/api/v1/sessions/${id}/transcript?agent_id=sub-1`);

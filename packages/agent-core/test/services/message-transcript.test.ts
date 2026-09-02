@@ -98,6 +98,39 @@ describe('reduceWireRecords', () => {
     expect(foldedLength).toBe(2);
   });
 
+  it('preserves structured tool details when rebuilding the wire transcript', () => {
+    const { entries } = reduceWireRecords([
+      appendMessage(userMessage('u1')),
+      loopEvent({ type: 'step.begin', uuid: 's1', turnId: 't', step: 0 }),
+      loopEvent({
+        type: 'tool.call',
+        uuid: 'c1',
+        turnId: 't',
+        step: 0,
+        stepUuid: 's1',
+        toolCallId: 'call_details',
+        name: 'Lookup',
+        arguments: '{}',
+      }),
+      loopEvent({
+        type: 'tool.result',
+        parentUuid: 'c1',
+        toolCallId: 'call_details',
+        result: {
+          output: 'lookup output',
+          details: { kind: 'rows', rows: [{ id: 1 }] },
+        },
+      }),
+      loopEvent({ type: 'step.end', uuid: 's1', turnId: 't', step: 0 }),
+    ]);
+
+    expect(entries.at(-1)?.message).toMatchObject({
+      role: 'tool',
+      toolCallId: 'call_details',
+      details: { kind: 'rows', rows: [{ id: 1 }] },
+    });
+  });
+
   it('compaction keeps the prefix and appends the user-role summary', () => {
     const { entries, foldedLength } = reduceWireRecords([
       appendMessage(userMessage('u1')),

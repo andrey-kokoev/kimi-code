@@ -7,6 +7,7 @@ import {
   deleteAllKittyImages,
   resetCapabilitiesCache,
   setCapabilities,
+  Text,
 } from '@moonshot-ai/pi-tui';
 import type {
   ApprovalRequest,
@@ -57,7 +58,7 @@ import {
   runModelSelector,
   type FeedbackPromptResult,
 } from '#/tui/commands/prompts';
-import type { QueuedMessage } from '#/tui/types';
+import type { QueuedMessage, ToolRenderDefinition } from '#/tui/types';
 import type { ImageAttachmentStore } from '#/tui/utils/image-attachment-store';
 
 vi.mock('#/tui/commands/prompts', async (importOriginal) => {
@@ -4437,6 +4438,118 @@ command = "vim"
       expect(approval).not.toContain('non-duplicated plan work');
       expect(approval).not.toContain('/tmp/no-duplicate-plan.md');
     });
+  });
+
+  it('delivers streamed tool details and partial updates to a custom renderer', async () => {
+    const renders: Array<{
+      output: string;
+      details: unknown;
+      partial: boolean;
+      updateCount: number;
+    }> = [];
+    const definition: ToolRenderDefinition = {
+      name: 'StructuredTool',
+      renderShell: 'self',
+      renderResult: (result, options) => {
+        renders.push({
+          output: typeof result.output === 'string' ? result.output : JSON.stringify(result.output),
+          details: result.details,
+          partial: options.isPartial,
+          updateCount: options.partialUpdates?.length ?? 0,
+        });
+        const detail = result.details;
+        const rowCount =
+          detail !== null &&
+          typeof detail === 'object' &&
+          'rows' in detail &&
+          Array.isArray(detail.rows)
+            ? detail.rows.length
+            : 0;
+        return new Text(
+          `structured:${typeof result.output === 'string' ? result.output : 'parts'}:rows=${String(rowCount)}`,
+          0,
+          0,
+        );
+      },
+    };
+    const { driver } = await makeDriver(
+      makeSession(),
+      {},
+      { ...makeStartupInput(), toolDefinitions: [definition] },
+    );
+    const sendQueued = vi.fn();
+    expect(driver.state.toolRenderDefinitions.resolve('StructuredTool')).toBe(definition);
+
+    driver.sessionEventHandler.handleEvent(
+      {
+        type: 'tool.call.started',
+        agentId: 'main',
+        sessionId: 'ses-1',
+        turnId: 1,
+        toolCallId: 'call-structured',
+        name: 'StructuredTool',
+        args: { query: 'moon' },
+      } as Event,
+      sendQueued,
+    );
+    driver.sessionEventHandler.handleEvent(
+      {
+        type: 'tool.progress',
+        agentId: 'main',
+        sessionId: 'ses-1',
+        turnId: 1,
+        toolCallId: 'call-structured',
+        update: { kind: 'stdout', text: 'working' },
+      } as Event,
+      sendQueued,
+    );
+    driver.sessionEventHandler.handleEvent(
+      {
+        type: 'tool.progress',
+        agentId: 'main',
+        sessionId: 'ses-1',
+        turnId: 1,
+        toolCallId: 'call-structured',
+        update: { kind: 'custom', customKind: 'phase', customData: { phase: 'working' } },
+      } as Event,
+      sendQueued,
+    );
+    driver.sessionEventHandler.handleEvent(
+      {
+        type: 'tool.result',
+        agentId: 'main',
+        sessionId: 'ses-1',
+        turnId: 1,
+        toolCallId: 'call-structured',
+        output: 'done',
+        details: { kind: 'rows', rows: [{ id: 1 }] },
+        isError: false,
+      } as Event,
+      sendQueued,
+    );
+
+    expect(renders).toEqual([
+      {
+        output: 'working',
+        details: undefined,
+        partial: true,
+        updateCount: 1,
+      },
+      {
+        output: 'working',
+        details: { phase: 'working' },
+        partial: true,
+        updateCount: 2,
+      },
+      {
+        output: 'done',
+        details: { kind: 'rows', rows: [{ id: 1 }] },
+        partial: false,
+        updateCount: 0,
+      },
+    ]);
+    const transcript = stripSgr(renderTranscript(driver));
+    expect(transcript).toContain('structured:done:rows=1');
   });
 
   it('renders AgentSwarm progress in the transcript instead of the tool-card body', async () => {
