@@ -597,7 +597,13 @@ async function finalizePendingToolResult(
     return {
       ...pendingResult,
       stopTurn: pendingResult.stopTurn,
-      result: { output, isError: true },
+      result: {
+        output,
+        isError: true,
+        ...(pendingResult.result.details !== undefined
+          ? { details: pendingResult.result.details }
+          : {}),
+      },
     };
   }
 }
@@ -730,7 +736,10 @@ function normalizeToolResult(r: ExecutableToolResult): ExecutableToolResult {
   // also where the note contract (string | undefined) is enforced: a
   // malformed or empty note is discarded — the tool's actual output is
   // still valid, and everything downstream trusts the contract.
-  const base: { output: typeof output; note?: string; truncated?: true } = { output };
+  const base: { output: typeof output; details?: unknown; note?: string; truncated?: true } = {
+    output,
+    ...(r.details !== undefined ? { details: r.details } : {}),
+  };
   if (typeof r.note === 'string' && r.note.length > 0) base.note = r.note;
   if (r.truncated === true) base.truncated = true;
   if (r.isError === true) {

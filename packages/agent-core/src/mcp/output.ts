@@ -174,6 +174,8 @@ export async function mcpResultToExecutableOutput(
   options: McpOutputOptions = {},
 ): Promise<{
   output: string | ContentPart[];
+  /** MCP structuredContent is the tool-owned data consumed by UI renderers. */
+  details?: unknown;
   isError: boolean;
   note?: string;
   truncated?: true;
@@ -255,6 +257,7 @@ export async function mcpResultToExecutableOutput(
   const output = collapseSingleText(capped.parts);
   return {
     output,
+    ...(result.structuredContent !== undefined ? { details: result.structuredContent } : {}),
     isError: result.isError,
     note: compressed.captions.length > 0 ? compressed.captions.join('\n') : undefined,
     truncated: truncated ? true : undefined,

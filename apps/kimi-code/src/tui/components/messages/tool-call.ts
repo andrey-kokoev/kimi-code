@@ -35,15 +35,13 @@ import { PlanBoxComponent } from './plan-box';
 import { ShellExecutionComponent } from './shell-execution';
 import { countNonEmptyLines, pickChip } from './tool-renderers/chip';
 import { buildGoalToolHeader } from './tool-renderers/goal';
-import {
-  isGenericToolResult,
-  pickResultRenderer,
-  resolveToolRenderDefinition,
-} from './tool-renderers/registry';
+import { isGenericToolResult, pickResultRenderer } from './tool-renderers/registry';
 import type {
   AnyToolRenderDefinition,
   ToolRenderContext,
+  ToolRenderDefinitionRegistryLike,
   ToolRenderResultOptions,
+  ToolRenderUpdate,
 } from './tool-renderers/types';
 
 const MAX_ARG_LENGTH = 60;
@@ -69,6 +67,7 @@ interface FinishedSubCall {
   readonly name: string;
   readonly args: Record<string, unknown>;
   readonly output: string;
+  readonly details?: unknown;
   readonly isError: boolean;
 }
 
@@ -84,6 +83,7 @@ interface SubToolActivity {
   args: Record<string, unknown>;
   phase: 'ongoing' | 'done' | 'failed';
   output?: string;
+  details?: unknown;
   readonly orderSeq: number;
 }
 
@@ -552,6 +552,16 @@ class PrefixedWrappedLine implements Component {
   }
 }
 
+function isToolRenderDefinitionRegistry(
+  value: unknown,
+): value is ToolRenderDefinitionRegistryLike {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as ToolRenderDefinitionRegistryLike).resolve === 'function'
+  );
+}
+
 export class ToolCallComponent extends Container {
   private expanded = false;
   private toolCall: ToolCallBlockData;
@@ -581,6 +591,7 @@ export class ToolCallComponent extends Container {
   private currentPlan: string | undefined;
   private headerText: Text;
   private callPreviewEndIndex = 0;
+  private callPreviewTarget: Container | undefined;
 
   // ── Subagent state ───────────────────────────────────────────────
   //
@@ -650,7 +661,14 @@ export class ToolCallComponent extends Container {
   // authoritative final state.
   private progressLines: string[] = [];
   private static readonly MAX_PROGRESS_LINES = 24;
+  private static readonly MAX_PARTIAL_RENDERER_UPDATES = 128;
   private liveOutput = '';
+  /** Ordered partial output stream passed to custom result renderers. */
+  private partialRendererOutput = '';
+  /** Ordered update metadata passed alongside the partial output stream. */
+  private partialRendererUpdates: ToolRenderUpdate[] = [];
+  /** Latest structured update payload, matching Pi's partial-result details. */
+  private partialRendererDetails: unknown;
 
   /**
    * Advertises `Ctrl+B` on a foreground Bash/Agent card that has been running
@@ -680,13 +698,16 @@ export class ToolCallComponent extends Container {
     toolCall: ToolCallBlockData,
     result: ToolResultBlockData | undefined,
     ui?: TUI,
-    toolDefinition?: AnyToolRenderDefinition,
+    toolDefinition?: AnyToolRenderDefinition | ToolRenderDefinitionRegistryLike,
   );
   constructor(
     toolCall: ToolCallBlockData,
     result: ToolResultBlockData | undefined,
     ui?: TUI,
-    workspaceDirOrDefinition?: string | AnyToolRenderDefinition,
+    workspaceDirOrDefinition?:
+      | string
+      | AnyToolRenderDefinition
+      | ToolRenderDefinitionRegistryLike,
     toolDefinition?: AnyToolRenderDefinition,
   ) {
     super();
@@ -698,10 +719,14 @@ export class ToolCallComponent extends Container {
     this.ui = ui;
     this.workspaceDir =
       typeof workspaceDirOrDefinition === 'string' ? workspaceDirOrDefinition : undefined;
-    this.toolDefinition =
+    const suppliedDefinition =
       toolDefinition ??
-      (typeof workspaceDirOrDefinition === 'string' ? undefined : workspaceDirOrDefinition) ??
-      resolveToolRenderDefinition(toolCall.name);
+      (typeof workspaceDirOrDefinition === 'string'
+        ? undefined
+        : isToolRenderDefinitionRegistry(workspaceDirOrDefinition)
+          ? workspaceDirOrDefinition.resolve(toolCall.name)
+          : workspaceDirOrDefinition);
+    this.toolDefinition = suppliedDefinition;
     this.applySubagentReplay(toolCall.subagent);
 
     this.addChild(new Spacer(1));
@@ -800,6 +825,9 @@ export class ToolCallComponent extends Container {
     // show both the streamed status lines and the final output stacked.
     this.progressLines = [];
     this.liveOutput = '';
+    this.partialRendererOutput = '';
+    this.partialRendererUpdates = [];
+    this.partialRendererDetails = undefined;
     this.detachHintVisible = false;
     this.stopDetachHintTimer();
     this.finalizeSubagentElapsedIfNeeded();
@@ -839,7 +867,7 @@ export class ToolCallComponent extends Container {
    * buffer fills past {@link ToolCallComponent.MAX_PROGRESS_LINES} so a
    * misbehaving tool can't grow the box unboundedly.
    */
-  appendProgress(text: string): void {
+  appendProgress(text: string, update?: ToolRenderUpdate): void {
     if (this.result !== undefined) return;
     for (const line of text.split('\n')) {
       this.progressLines.push(line);
@@ -847,13 +875,15 @@ export class ToolCallComponent extends Container {
     while (this.progressLines.length > ToolCallComponent.MAX_PROGRESS_LINES) {
       this.progressLines.shift();
     }
+    this.recordPartialRendererUpdate(update, text, true);
+    this.appendPartialRendererOutput(text, true);
     this.updatePartialRendererResult();
     this.rebuildBody();
     this.notifySnapshotChange();
     this.ui?.requestRender();
   }
 
-  appendLiveOutput(text: string): void {
+  appendLiveOutput(text: string, update?: ToolRenderUpdate): void {
     if (this.result !== undefined || text.length === 0) return;
     this.liveOutput += text;
     if (this.liveOutput.length > MAX_LIVE_OUTPUT_CHARS) {
@@ -861,6 +891,18 @@ export class ToolCallComponent extends Container {
         this.liveOutput.length - MAX_LIVE_OUTPUT_CHARS,
       )}`;
     }
+    this.recordPartialRendererUpdate(update, text, false);
+    this.appendPartialRendererOutput(text, false);
+    this.updatePartialRendererResult();
+    this.rebuildContent();
+    this.notifySnapshotChange();
+    this.ui?.requestRender();
+  }
+
+  /** Retain a metadata-only update for a custom partial result renderer. */
+  appendPartialUpdate(update: ToolRenderUpdate): void {
+    if (this.result !== undefined) return;
+    this.recordPartialRendererUpdate(update, update.text ?? '', update.kind === 'status');
     this.updatePartialRendererResult();
     this.rebuildContent();
     this.notifySnapshotChange();
@@ -910,6 +952,7 @@ export class ToolCallComponent extends Container {
         name: call.name,
         args: call.args,
         output: call.result.output,
+        ...(call.result.details !== undefined ? { details: call.result.details } : {}),
         isError: call.result.is_error ?? false,
       });
       this.upsertSubToolActivity(
@@ -918,6 +961,7 @@ export class ToolCallComponent extends Container {
         call.args,
         call.result.is_error === true ? 'failed' : 'done',
         call.result.output,
+        call.result.details,
       );
     }
     while (this.finishedSubCalls.length > MAX_SUB_TOOL_CALLS_SHOWN) {
@@ -1039,6 +1083,7 @@ export class ToolCallComponent extends Container {
     args: Record<string, unknown>,
     phase: SubToolActivity['phase'],
     output?: string,
+    details?: unknown,
   ): void {
     const existing = this.subToolActivities.get(id);
     if (existing !== undefined) {
@@ -1046,6 +1091,7 @@ export class ToolCallComponent extends Container {
       existing.args = args;
       existing.phase = phase;
       if (output !== undefined) existing.output = output;
+      if (details !== undefined) existing.details = details;
       return;
     }
     this.subToolActivities.set(id, {
@@ -1054,6 +1100,7 @@ export class ToolCallComponent extends Container {
       args,
       phase,
       ...(output !== undefined ? { output } : {}),
+      ...(details !== undefined ? { details } : {}),
       orderSeq: ++this.subToolOrderSeq,
     });
   }
@@ -1478,6 +1525,7 @@ export class ToolCallComponent extends Container {
   finishSubToolCall(result: {
     tool_call_id: string;
     output: string;
+    details?: unknown;
     is_error?: boolean | undefined;
   }): void {
     const ongoing = this.ongoingSubCalls.get(result.tool_call_id);
@@ -1487,6 +1535,7 @@ export class ToolCallComponent extends Container {
       name: ongoing.name,
       args: ongoing.args,
       output: result.output,
+      ...(result.details !== undefined ? { details: result.details } : {}),
       isError: result.is_error ?? false,
     });
     this.upsertSubToolActivity(
@@ -1495,6 +1544,7 @@ export class ToolCallComponent extends Container {
       ongoing.args,
       result.is_error === true ? 'failed' : 'done',
       result.output,
+      result.details,
     );
     while (this.finishedSubCalls.length > MAX_SUB_TOOL_CALLS_SHOWN) {
       this.finishedSubCalls.shift();
@@ -1630,16 +1680,55 @@ export class ToolCallComponent extends Container {
     );
   }
 
+  private recordPartialRendererUpdate(
+    update: ToolRenderUpdate | undefined,
+    text: string,
+    line: boolean,
+  ): void {
+    const retainedUpdate =
+      update ?? {
+        kind: line ? 'status' : 'stdout',
+        text,
+      };
+    this.partialRendererUpdates.push(retainedUpdate);
+    if (update !== undefined && 'customData' in update) {
+      this.partialRendererDetails = update.customData;
+    }
+    while (
+      this.partialRendererUpdates.length > ToolCallComponent.MAX_PARTIAL_RENDERER_UPDATES
+    ) {
+      this.partialRendererUpdates.shift();
+    }
+  }
+
+  private appendPartialRendererOutput(text: string, line: boolean): void {
+    if (text.length === 0) return;
+    if (line && this.partialRendererOutput.length > 0 && !this.partialRendererOutput.endsWith('\n')) {
+      this.partialRendererOutput += '\n';
+    }
+    this.partialRendererOutput += text;
+    if (line && !this.partialRendererOutput.endsWith('\n')) {
+      this.partialRendererOutput += '\n';
+    }
+    if (this.partialRendererOutput.length > MAX_LIVE_OUTPUT_CHARS) {
+      this.partialRendererOutput = `[...truncated]\n${this.partialRendererOutput.slice(
+        this.partialRendererOutput.length - MAX_LIVE_OUTPUT_CHARS,
+      )}`;
+    }
+  }
+
   private updatePartialRendererResult(): void {
     if (this.result !== undefined) return;
-    const progress = this.progressLines.join('\n');
-    const output = [progress, this.liveOutput].filter((part) => part.length > 0).join('\n');
+    const output = this.partialRendererOutput.replace(/\n+$/, '');
     this.partialRendererResult =
-      output.length === 0
+      output.length === 0 && this.partialRendererUpdates.length === 0
         ? undefined
         : {
             tool_call_id: this.toolCall.id,
             output,
+            ...(this.partialRendererDetails !== undefined
+              ? { details: this.partialRendererDetails }
+              : {}),
             is_error: false,
           };
   }
@@ -1667,7 +1756,15 @@ export class ToolCallComponent extends Container {
   }
 
   private createToolRenderCallFallback(): Component {
-    return new Text(currentTheme.boldFg('primary', this.toolCall.name), 0, 0);
+    const keyArg = extractKeyArgument(this.toolCall.name, this.toolCall.args, this.workspaceDir);
+    const decoded = decodeMcpToolName(this.toolCall.name);
+    const toolLabel =
+      this.toolDefinition?.label ??
+      (decoded === null
+        ? this.toolCall.name
+        : `${decoded.toolName} · MCP/${decoded.serverName}`);
+    const suffix = keyArg === null ? '' : currentTheme.dim(` (${keyArg})`);
+    return new Text(currentTheme.boldFg('primary', toolLabel) + suffix, 0, 0);
   }
 
   private createToolRenderResultFallback(): Component[] {
@@ -1703,6 +1800,9 @@ export class ToolCallComponent extends Container {
     const options: ToolRenderResultOptions = {
       expanded: this.expanded,
       isPartial: this.rendererIsPartial,
+      ...(this.rendererIsPartial && this.partialRendererUpdates.length > 0
+        ? { partialUpdates: [...this.partialRendererUpdates] }
+        : {}),
     };
     try {
       const component = renderer(
@@ -1723,8 +1823,22 @@ export class ToolCallComponent extends Container {
   private buildSelfRender(): void {
     this.selfRenderContainer.clear();
 
-    const call = this.tryBuildCustomCallRenderer() ?? this.createToolRenderCallFallback();
-    this.selfRenderContainer.addChild(call);
+    const customCall = this.tryBuildCustomCallRenderer();
+    if (customCall !== undefined) {
+      this.selfRenderContainer.addChild(customCall);
+    } else {
+      // A self-owned definition can override only the result renderer. Keep
+      // the same useful call preview that Kimi shows in its normal shell;
+      // unlike the normal shell, self mode has no header to supply the tool
+      // name and key argument, so include that label here as well.
+      const isBash = this.toolCall.name === 'Bash';
+      if (!isBash) this.selfRenderContainer.addChild(this.createToolRenderCallFallback());
+      const beforePreview = this.selfRenderContainer.children.length;
+      this.buildBuiltInCallPreview(this.selfRenderContainer);
+      if (this.selfRenderContainer.children.length === beforePreview) {
+        this.selfRenderContainer.addChild(this.createToolRenderCallFallback());
+      }
+    }
 
     if (this.currentRendererResult() === undefined) return;
     const result = this.tryBuildCustomResultRenderer();
@@ -2170,98 +2284,111 @@ export class ToolCallComponent extends Container {
     );
   }
 
+  private addCallPreviewChild(component: Component): void {
+    (this.callPreviewTarget ?? this).addChild(component);
+  }
+
   private buildCallPreview(): void {
     const customCall = this.tryBuildCustomCallRenderer();
     if (customCall !== undefined) {
       this.addChild(customCall);
       return;
     }
+    this.buildBuiltInCallPreview(this);
+  }
 
-    const name = this.toolCall.name;
-    if (name === 'ExitPlanMode') {
-      this.buildPlanPreview();
-      return;
-    }
-    if (this.result === undefined && this.toolCall.truncated === true) {
-      this.addChild(
-        new Text(
-          currentTheme.dim('Tool call arguments truncated by max_tokens — call never executed.'),
-          2,
-          0,
-        ),
-      );
-      return;
-    }
-    if (this.result === undefined && this.toolCall.streamingArguments !== undefined) {
-      this.buildStreamingPreview(this.toolCall.streamingArguments);
-      return;
-    }
-    // Cap Edit's diff as soon as args finalize, not only when the result
-    // lands — mirroring Write's writeShouldCap below. Otherwise the render
-    // tick between finalized args (streamingArguments cleared by the
-    // `tool.call.started` payload) and the result draws the full diff, then
-    // snaps back to the cap: a height collapse that triggers pi-tui's full
-    // redraw and wipes scrollback. Streaming frames (streamingArguments set)
-    // still take buildStreamingPreview above and never reach here.
-    const shouldCap = !this.expanded;
-    if (name === 'Write') {
-      const content = str(this.toolCall.args['content']);
-      if (content.length === 0) return;
-      const filePath = str(this.toolCall.args['file_path'] ?? this.toolCall.args['path']);
-      const lang = langFromPath(filePath);
-      const allLines = highlightLines(content, lang);
-      // Cap as soon as args finalize, not just when result lands. Otherwise the
-      // brief render tick between finalized args and result draws the full file,
-      // and the snap back to the collapsed cap triggers pi-tui's full-redraw
-      // path which wipes the terminal scrollback (pre-TUI history).
-      const writeShouldCap = !this.expanded;
-      const shown = writeShouldCap ? allLines.slice(0, COMMAND_PREVIEW_LINES) : allLines;
-      const remaining = allLines.length - shown.length;
-      for (const [i, line] of shown.entries()) {
-        const lineNum = currentTheme.dim(String(i + 1).padStart(4) + '  ');
-        this.addChild(new Text(lineNum + line, 2, 0));
+  private buildBuiltInCallPreview(target: Container): void {
+    const previousTarget = this.callPreviewTarget;
+    this.callPreviewTarget = target;
+    try {
+      const name = this.toolCall.name;
+      if (name === 'ExitPlanMode') {
+        this.buildPlanPreview();
+        return;
       }
-      if (writeShouldCap && remaining > 0) {
-        this.addChild(
+      if (this.result === undefined && this.toolCall.truncated === true) {
+        this.addCallPreviewChild(
           new Text(
-            currentTheme.dim(
-              `... (${String(remaining)} more lines, ${String(allLines.length)} total, ctrl+o to expand)`,
-            ),
+            currentTheme.dim('Tool call arguments truncated by max_tokens — call never executed.'),
             2,
             0,
           ),
         );
+        return;
       }
-    } else if (name === 'Edit') {
-      const oldStr = str(this.toolCall.args['old_string']);
-      const newStr = str(this.toolCall.args['new_string']);
-      if (oldStr.length === 0 && newStr.length === 0) return;
-      const filePath = str(this.toolCall.args['file_path'] ?? this.toolCall.args['path']);
-      const lines = renderDiffLinesClustered(oldStr, newStr, filePath, {
-        contextLines: 3,
-        ...(shouldCap ? { maxLines: COMMAND_PREVIEW_LINES } : {}),
-      });
-      for (const line of lines) {
-        this.addChild(new Text(line, 2, 0));
+      if (this.result === undefined && this.toolCall.streamingArguments !== undefined) {
+        this.buildStreamingPreview(this.toolCall.streamingArguments);
+        return;
       }
-    } else if (name === 'Bash') {
-      // Surface the command in the body across the whole lifecycle — while
-      // streaming, running, and after the result lands. Keeping the collapsed
-      // command preview here (instead of yielding to the result renderer once
-      // the result lands) avoids a height collapse when a multi-line command
-      // finishes with short output: the command block stays put and only the
-      // live-output tail swaps for the result. Owned solely by buildCallPreview
-      // so the command never renders twice; shellExecutionResultRenderer
-      // renders the result only.
-      const command = str(this.toolCall.args['command']);
-      if (command.length === 0) return;
-      this.addChild(
-        new ShellExecutionComponent({
-          command,
-          showCommand: true,
-          commandPreviewLines: this.expanded ? undefined : COMMAND_PREVIEW_LINES,
-        }),
-      );
+      // Cap Edit's diff as soon as args finalize, not only when the result
+      // lands — mirroring Write's writeShouldCap below. Otherwise the render
+      // tick between finalized args (streamingArguments cleared by the
+      // `tool.call.started` payload) and the result draws the full diff, then
+      // snaps back to the cap: a height collapse that triggers pi-tui's full
+      // redraw and wipes scrollback. Streaming frames (streamingArguments set)
+      // still take buildStreamingPreview above and never reach here.
+      const shouldCap = !this.expanded;
+      if (name === 'Write') {
+        const content = str(this.toolCall.args['content']);
+        if (content.length === 0) return;
+        const filePath = str(this.toolCall.args['file_path'] ?? this.toolCall.args['path']);
+        const lang = langFromPath(filePath);
+        const allLines = highlightLines(content, lang);
+        // Cap as soon as args finalize, not just when result lands. Otherwise the
+        // brief render tick between finalized args and result draws the full file,
+        // and the snap back to the collapsed cap triggers pi-tui's full-redraw
+        // path which wipes the terminal scrollback (pre-TUI history).
+        const writeShouldCap = !this.expanded;
+        const shown = writeShouldCap ? allLines.slice(0, COMMAND_PREVIEW_LINES) : allLines;
+        const remaining = allLines.length - shown.length;
+        for (const [i, line] of shown.entries()) {
+          const lineNum = currentTheme.dim(String(i + 1).padStart(4) + '  ');
+          this.addCallPreviewChild(new Text(lineNum + line, 2, 0));
+        }
+        if (writeShouldCap && remaining > 0) {
+          this.addCallPreviewChild(
+            new Text(
+              currentTheme.dim(
+                `... (${String(remaining)} more lines, ${String(allLines.length)} total, ctrl+o to expand)`,
+              ),
+              2,
+              0,
+            ),
+          );
+        }
+      } else if (name === 'Edit') {
+        const oldStr = str(this.toolCall.args['old_string']);
+        const newStr = str(this.toolCall.args['new_string']);
+        if (oldStr.length === 0 && newStr.length === 0) return;
+        const filePath = str(this.toolCall.args['file_path'] ?? this.toolCall.args['path']);
+        const lines = renderDiffLinesClustered(oldStr, newStr, filePath, {
+          contextLines: 3,
+          ...(shouldCap ? { maxLines: COMMAND_PREVIEW_LINES } : {}),
+        });
+        for (const line of lines) {
+          this.addCallPreviewChild(new Text(line, 2, 0));
+        }
+      } else if (name === 'Bash') {
+        // Surface the command in the body across the whole lifecycle — while
+        // streaming, running, and after the result lands. Keeping the collapsed
+        // command preview here (instead of yielding to the result renderer once
+        // the result lands) avoids a height collapse when a multi-line command
+        // finishes with short output: the command block stays put and only the
+        // live-output tail swaps for the result. Owned solely by buildCallPreview
+        // so the command never renders twice; shellExecutionResultRenderer
+        // renders the result only.
+        const command = str(this.toolCall.args['command']);
+        if (command.length === 0) return;
+        this.addCallPreviewChild(
+          new ShellExecutionComponent({
+            command,
+            showCommand: true,
+            commandPreviewLines: this.expanded ? undefined : COMMAND_PREVIEW_LINES,
+          }),
+        );
+      }
+    } finally {
+      this.callPreviewTarget = previousTarget;
     }
   }
 
@@ -2298,7 +2425,7 @@ export class ToolCallComponent extends Container {
             ? allLines.length - maxLines + i
             : i;
         const lineNum = currentTheme.dim(String(originalLineNumber + 1).padStart(4) + '  ');
-        this.addChild(new Text(lineNum + line, 2, 0));
+        this.addCallPreviewChild(new Text(lineNum + line, 2, 0));
       }
       return;
     }
@@ -2315,13 +2442,13 @@ export class ToolCallComponent extends Container {
       const progress = `Preparing changes${target}... ${formatByteSize(bytes)} · ${formatElapsed(
         elapsedSeconds,
       )} elapsed`;
-      this.addChild(new Text(currentTheme.dim(progress), 2, 0));
+      this.addCallPreviewChild(new Text(currentTheme.dim(progress), 2, 0));
       return;
     }
     if (name === 'Bash') {
       const cmd = extractPartialStringField(previewText, 'command');
       if (cmd === undefined || cmd.length === 0) return;
-      this.addChild(
+      this.addCallPreviewChild(
         new ShellExecutionComponent({
           command: cmd,
           showCommand: true,
@@ -2340,7 +2467,7 @@ export class ToolCallComponent extends Container {
     const plan = this.resolvePlanForPreview();
     if (plan.length === 0) return;
     const path = this.resolvePlanPath();
-    this.addChild(
+    this.addCallPreviewChild(
       new PlanBoxComponent(plan, this.markdownTheme, currentTheme.color('success'), path, {
         status: this.resolvePlanBoxStatus(),
       }),

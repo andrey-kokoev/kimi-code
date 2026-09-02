@@ -279,6 +279,7 @@ describe('mcpResultToExecutableOutput', () => {
     expect(joined).toContain('<mcp-structured-result>');
     expect(joined).toContain('"structuredContent":{"foo":1}');
     expect(joined).toContain('"_meta":{"bar":2}');
+    expect(out.details).toEqual({ foo: 1 });
     expect(out.isError).toBe(false);
   });
 

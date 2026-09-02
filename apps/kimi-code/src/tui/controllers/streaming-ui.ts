@@ -7,7 +7,6 @@ import { CompactionComponent } from '../components/dialogs/compaction';
 import { ReadGroupComponent } from '../components/messages/read-group';
 import { ThinkingComponent } from '../components/messages/thinking';
 import { ToolCallComponent } from '../components/messages/tool-call';
-import { resolveToolRenderDefinition } from '../components/messages/tool-renderers/registry';
 import { STREAMING_UI_FLUSH_MS } from '../constant/streaming';
 import { hasDispose } from '../utils/component-capabilities';
 import { appendStreamingArgsPreview, parseStreamingArgs } from '../utils/event-payload';
@@ -668,7 +667,7 @@ export class StreamingUIController {
       undefined,
       state.ui,
       state.appState.workDir,
-      state.toolRenderDefinitions?.get(toolCall.name),
+      state.toolRenderDefinitions?.resolve(toolCall.name),
     );
     if (state.toolOutputExpanded) tc.setExpanded(true);
     this._pendingToolComponents.set(toolCall.id, tc);
@@ -714,7 +713,7 @@ export class StreamingUIController {
         result,
         state.ui,
         state.appState.workDir,
-        state.toolRenderDefinitions?.get(matchedCall.name),
+        state.toolRenderDefinitions?.resolve(matchedCall.name),
       );
       if (state.toolOutputExpanded) completed.setExpanded(true);
       state.transcriptContainer.addChild(completed);
@@ -843,8 +842,7 @@ export class StreamingUIController {
   }
 
   private hasToolOwnedRenderer(toolName: string): boolean {
-    const definition =
-      this.host.state.toolRenderDefinitions?.get(toolName) ?? resolveToolRenderDefinition(toolName);
+    const definition = this.host.state.toolRenderDefinitions?.resolve(toolName);
     return (
       definition?.renderShell === 'self' ||
       definition?.renderCall !== undefined ||

@@ -1,8 +1,9 @@
-import type { Terminal } from '@moonshot-ai/pi-tui';
+import { Text, type Terminal } from '@moonshot-ai/pi-tui';
 import type { BackgroundTaskInfo } from '@moonshot-ai/kimi-code-sdk';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AgentActivityViewer, formatSubagentActivityPreview } from '#/tui/components/dialogs/agent-activity-viewer';
+import { ToolRenderDefinitionRegistry } from '#/tui/components/messages/tool-renderers/registry';
 import type { SubagentActivityRecord } from '#/tui/controllers/subagent-activity-store';
 
 const ANSI_SGR = /\[[0-9;]*m/g;
@@ -112,6 +113,47 @@ describe('AgentActivityViewer', () => {
     expect(text).toContain('running');
     expect(text).toContain('step 8–9 / 12');
     expect(text).toContain('earlier steps discarded');
+  });
+
+  it('uses the shared custom renderer registry for background tool results', () => {
+    const details: unknown[] = [];
+    const registry = new ToolRenderDefinitionRegistry([
+      {
+        name: 'CustomBackgroundTool',
+        renderResult: (result) => {
+          details.push(result.details);
+          return new Text('custom background result', 0, 0);
+        },
+      },
+    ]);
+    const viewer = makeViewer({
+      toolRenderDefinitions: registry,
+      record: record({
+        steps: [
+          {
+            step: 1,
+            textTail: '',
+            toolCalls: [
+              {
+                id: 'call-1',
+                name: 'CustomBackgroundTool',
+                args: {},
+                status: 'done',
+                startedAt: Date.now(),
+                result: {
+                  tool_call_id: 'call-1',
+                  output: 'fallback',
+                  details: { rows: [1, 2] },
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(renderPlain(viewer)).toContain('custom background result');
+    expect(details).toEqual([{ rows: [1, 2] }]);
   });
 
   it('renders steps with tool call headers and result renderer output', () => {

@@ -33,12 +33,23 @@ export function strArg(args: Record<string, unknown>, ...keys: string[]): string
  */
 export type ToolRenderShell = 'default' | 'self';
 
+/** An execution update retained for a partial custom-renderer result. */
+export interface ToolRenderUpdate {
+  readonly kind: 'stdout' | 'stderr' | 'progress' | 'status' | 'custom';
+  readonly text?: string;
+  readonly percent?: number;
+  readonly customKind?: string;
+  readonly customData?: unknown;
+}
+
 /** Options describing the result currently being rendered. */
 export interface ToolRenderResultOptions {
   /** Whether the result view is expanded (Ctrl+O). */
   readonly expanded: boolean;
   /** Whether the result is a partial/streaming result. */
   readonly isPartial: boolean;
+  /** Ordered execution updates received before the final result. */
+  readonly partialUpdates?: readonly ToolRenderUpdate[];
 }
 
 /**
@@ -125,11 +136,18 @@ export interface ToolRenderDefinition<
 /** A definition with erased generic parameters, for host-side lookup. */
 export type AnyToolRenderDefinition = ToolRenderDefinition<any, any>;
 
+/** The minimal registry surface accepted by a TUI host. */
+export interface ToolRenderDefinitionRegistryLike {
+  resolve(name: string): AnyToolRenderDefinition | undefined;
+  entries(): readonly AnyToolRenderDefinition[];
+}
+
 /** Accepted forms for supplying definitions to a TUI host. */
 export type ToolRenderDefinitions =
   | readonly AnyToolRenderDefinition[]
   | ReadonlyMap<string, AnyToolRenderDefinition>
-  | Readonly<Record<string, AnyToolRenderDefinition>>;
+  | Readonly<Record<string, AnyToolRenderDefinition>>
+  | ToolRenderDefinitionRegistryLike;
 
 /** Pi-compatible short names for the UI portion of a tool definition. */
 export type ToolDefinition<

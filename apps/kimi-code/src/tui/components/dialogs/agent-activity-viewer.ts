@@ -34,6 +34,10 @@ import type {
 import { currentTheme } from '#/tui/theme';
 import type { ToolCallBlockData } from '#/tui/types';
 import { printableChar } from '#/tui/utils/printable-key';
+import type {
+  ToolRenderDefinitionRegistryLike,
+  ToolRenderResultOptions,
+} from '../messages/tool-renderers/types';
 import { AssistantMessageComponent } from '../messages/assistant-message';
 import { extractKeyArgument } from '../messages/tool-call';
 import { pickChip } from '../messages/tool-renderers/chip';
@@ -46,6 +50,8 @@ export interface AgentActivityViewerProps {
   readonly taskId: string;
   readonly info: BackgroundTaskInfo | undefined;
   readonly record: SubagentActivityRecord | undefined;
+  /** Same per-TUI registry used by the main transcript renderer. */
+  readonly toolRenderDefinitions?: ToolRenderDefinitionRegistryLike;
   readonly onClose: () => void;
 }
 
@@ -261,11 +267,13 @@ export class AgentActivityViewer extends Container implements Focusable {
     if (call.name === 'ReadMediaFile' && call.result.is_error !== true) {
       return [currentTheme.dim(`${MESSAGE_INDENT}[media output omitted]`)];
     }
-    const components = pickResultRenderer(call.name)(
-      this.toToolCallBlockData(call),
-      call.result,
-      { expanded: this.expanded },
-    );
+    const toolCall = this.toToolCallBlockData(call);
+    const custom = this.renderCustomResult(toolCall, call.result);
+    if (custom !== undefined) return custom.render(innerWidth);
+
+    const components = pickResultRenderer(call.name)(toolCall, call.result, {
+      expanded: this.expanded,
+    });
     const out: string[] = [];
     for (const component of components) {
       out.push(...component.render(innerWidth));
@@ -275,6 +283,43 @@ export class AgentActivityViewer extends Container implements Focusable {
 
   private toToolCallBlockData(call: SubToolCallActivity): ToolCallBlockData {
     return { id: call.id, name: call.name, args: call.args };
+  }
+
+  private renderCustomResult(
+    toolCall: ToolCallBlockData,
+    result: NonNullable<SubToolCallActivity['result']>,
+  ): { render(width: number): string[] } | undefined {
+    const renderer = this.props.toolRenderDefinitions?.resolve(toolCall.name)?.renderResult;
+    if (renderer === undefined) return undefined;
+    const options: ToolRenderResultOptions = { expanded: this.expanded, isPartial: false };
+    try {
+      const component = renderer(result, options, currentTheme, {
+        args: toolCall.args,
+        toolCallId: toolCall.id,
+        invalidate: () => {
+          this.invalidate();
+        },
+        lastComponent: undefined,
+        state: {},
+        cwd: '',
+        executionStarted: true,
+        argsComplete: true,
+        isPartial: false,
+        expanded: this.expanded,
+        showImages: true,
+        isError: result.is_error === true,
+      });
+      if (
+        component === null ||
+        (typeof component !== 'object' && typeof component !== 'function') ||
+        typeof (component as { render?: unknown }).render !== 'function'
+      ) {
+        return undefined;
+      }
+      return component;
+    } catch {
+      return undefined;
+    }
   }
 
   // ── render ─────────────────────────────────────────────────────────

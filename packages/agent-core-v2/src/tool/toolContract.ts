@@ -38,6 +38,8 @@ export interface ToolDelivery {
 
 export interface ExecutableToolSuccessResult {
   readonly output: ExecutableToolOutput;
+  /** Structured tool-owned data preserved for UI renderers and replay. */
+  readonly details?: unknown;
   readonly isError?: false | undefined;
   readonly stopTurn?: boolean | undefined;
   readonly truncated?: boolean | undefined;
@@ -47,6 +49,8 @@ export interface ExecutableToolSuccessResult {
 
 export interface ExecutableToolErrorResult {
   readonly output: ExecutableToolOutput;
+  /** Structured tool-owned data preserved for UI renderers and replay. */
+  readonly details?: unknown;
   readonly isError: true;
   readonly stopTurn?: boolean | undefined;
   readonly truncated?: boolean | undefined;

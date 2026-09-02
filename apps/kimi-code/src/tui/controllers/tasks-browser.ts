@@ -6,6 +6,7 @@ import { TaskOutputViewer } from '../components/dialogs/task-output-viewer';
 import { TasksBrowserApp, type TasksFilter } from '../components/dialogs/tasks-browser';
 import type { Theme } from '#/tui/theme';
 import type { CustomEditor } from '../components/editor/custom-editor';
+import type { ToolRenderDefinitionRegistryLike } from '../components/messages/tool-renderers/types';
 import {
   beginScreenTakeover,
   endScreenTakeover,
@@ -21,6 +22,7 @@ export interface TasksBrowserHost {
     readonly terminal: ProcessTerminal;
     readonly ui: TUI;
     readonly editor: CustomEditor;
+    readonly toolRenderDefinitions: ToolRenderDefinitionRegistryLike;
   };
   readonly backgroundTasks: ReadonlyMap<string, BackgroundTaskInfo>;
   readonly sessionEventHandler: SessionEventHandler;
@@ -415,6 +417,7 @@ export class TasksBrowserController {
         taskId,
         info,
         record,
+        toolRenderDefinitions: state.toolRenderDefinitions,
         onClose: () => {
           this.closeOutputViewer();
         },
@@ -456,6 +459,7 @@ export class TasksBrowserController {
       taskId: viewer.taskId,
       info,
       record,
+      toolRenderDefinitions: state.toolRenderDefinitions,
       onClose: () => {
         this.closeOutputViewer();
       },

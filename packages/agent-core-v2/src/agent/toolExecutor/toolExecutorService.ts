@@ -612,6 +612,7 @@ export class AgentToolExecutorService implements IAgentToolExecutorService {
       turnId: options.turnId,
       toolCallId: call.toolCall.id,
       output: result.output,
+      ...(result.details !== undefined ? { details: result.details } : {}),
       isError: result.isError,
     });
   }
@@ -659,6 +660,7 @@ export class AgentToolExecutorService implements IAgentToolExecutorService {
       return {
         output,
         isError: true,
+        ...(result.details !== undefined ? { details: result.details } : {}),
         description: result.description,
         display: result.display,
         approvalRule: result.approvalRule,
@@ -889,10 +891,15 @@ function normalizeToolResult(result: ExecutableToolResult): ToolResult {
   }
   const base: {
     output: ToolResult['output'];
+    details?: unknown;
     stopTurn?: boolean;
     truncated?: true;
     note?: string;
-  } = { output, stopTurn: result.stopTurn };
+  } = {
+    output,
+    ...(result.details !== undefined ? { details: result.details } : {}),
+    stopTurn: result.stopTurn,
+  };
   if (result.truncated === true) base.truncated = true;
   if (typeof result.note === 'string' && result.note.length > 0) base.note = result.note;
   if (result.isError === true) {

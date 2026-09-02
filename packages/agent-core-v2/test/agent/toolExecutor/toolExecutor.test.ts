@@ -210,10 +210,11 @@ describe('AgentToolExecutorService', () => {
     );
   });
 
-  it('preserves internal result notes without exposing them on protocol tool.result events', async () => {
+  it('preserves renderer details while keeping internal notes off protocol events', async () => {
     const tool = new TestTool('captioned', {
       result: {
         output: 'image sent',
+        details: { mediaType: 'image', width: 640 },
         note: '<system>Image compressed.</system>',
       },
     });
@@ -223,6 +224,7 @@ describe('AgentToolExecutorService', () => {
 
     expect(results[0]).toMatchObject({
       output: 'image sent',
+      details: { mediaType: 'image', width: 640 },
       note: '<system>Image compressed.</system>',
     });
     const protocolResult = protocolEvents.find(
@@ -233,6 +235,7 @@ describe('AgentToolExecutorService', () => {
       type: 'tool.result',
       toolCallId: 'call_captioned',
       output: 'image sent',
+      details: { mediaType: 'image', width: 640 },
     });
     expect(protocolResult as unknown as Record<string, unknown>).not.toHaveProperty('note');
   });

@@ -746,7 +746,21 @@ export function healTurnOps(
         const liveHasOutcome =
           liveTool !== undefined && (liveTool.output !== undefined || liveTool.error !== undefined);
         const snapshotHasOutcome = frame.output !== undefined || frame.error !== undefined;
-        if (liveTool !== undefined && (liveHasOutcome || !snapshotHasOutcome)) continue;
+        if (liveTool !== undefined && liveHasOutcome) {
+          // A live frame may have received its terminal output before the
+          // persisted snapshot was attached. Preserve structured details from
+          // that snapshot even when the live frame otherwise wins.
+          if (frame.details !== undefined && liveTool.details === undefined) {
+            ops.push({
+              op: 'frame.upsert',
+              turnId: snapshotTurn.turnId,
+              stepId: step.stepId,
+              frame: { ...liveTool, details: frame.details },
+            });
+          }
+          continue;
+        }
+        if (liveTool !== undefined && !snapshotHasOutcome) continue;
         ops.push({
           op: 'frame.upsert',
           turnId: snapshotTurn.turnId,

@@ -128,7 +128,10 @@ import { registerReverseRPCHandlers } from './reverse-rpc/index';
 import { QuestionController } from './reverse-rpc/question/controller';
 import { createQuestionAskHandler } from './reverse-rpc/question/handler';
 import type { ApprovalPanelData, QuestionPanelData } from './reverse-rpc/types';
-import type { ToolRenderDefinitions } from './components/messages/tool-renderers/types';
+import type {
+  ToolRenderDefinition,
+  ToolRenderDefinitions,
+} from './components/messages/tool-renderers/types';
 import { currentTheme, getColorPalette, getBuiltInPalette, isBuiltInTheme } from './theme';
 import type { ColorToken, ResolvedTheme, ThemeName } from './theme';
 import { createTUIState, type TUIState } from './tui-state';
@@ -415,6 +418,13 @@ export class KimiTUI {
 
   track(event: string, properties?: Parameters<KimiHarness['track']>[1]): void {
     this.harness.track(event, properties);
+  }
+
+  /** Register a renderer on this TUI instance without affecting other sessions. */
+  registerToolRenderDefinition<TArgs extends object, TState>(
+    definition: ToolRenderDefinition<TArgs, TState>,
+  ): () => void {
+    return this.state.toolRenderDefinitions.register(definition);
   }
 
   constructor(harness: KimiHarness, startupInput: KimiTUIStartupInput) {
@@ -2377,7 +2387,7 @@ export class KimiTUI {
             entry.toolCallData.result,
             this.state.ui,
             this.state.appState.workDir,
-            this.state.toolRenderDefinitions?.get(entry.toolCallData.name),
+            this.state.toolRenderDefinitions.resolve(entry.toolCallData.name),
           );
           if (this.state.toolOutputExpanded) tc.setExpanded(true);
           return tc;

@@ -368,6 +368,7 @@ export class SessionReplayRenderer {
     const result: ToolResultBlockData = {
       tool_call_id: toolCallId,
       output: toolResultOutput(message.content),
+      ...(message.details !== undefined ? { details: message.details } : {}),
       is_error: message.isError,
     };
     call.result = result;

@@ -28,6 +28,8 @@ export interface ToolResultEvent {
   readonly turnId: number;
   readonly toolCallId: string;
   readonly output: unknown;
+  /** Structured tool-owned data; kept separate from the model-facing output. */
+  readonly details?: unknown;
   readonly isError?: boolean;
   readonly synthetic?: boolean;
 }

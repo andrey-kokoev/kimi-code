@@ -242,6 +242,7 @@ export class SubagentActivityStore {
         call.result = {
           tool_call_id: call.id,
           output,
+          ...(event.details !== undefined ? { details: event.details } : {}),
           is_error: event.isError,
           synthetic: event.synthetic,
         };

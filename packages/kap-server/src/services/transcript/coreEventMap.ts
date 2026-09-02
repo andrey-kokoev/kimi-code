@@ -762,6 +762,7 @@ export class AgentTranscriptProjector {
   private onToolResult(event: {
     toolCallId: string;
     output: unknown;
+    details?: unknown;
     isError?: boolean;
   }): TranscriptOperation[] {
     const hit = this.toolFrames.get(event.toolCallId) ?? this.adoptToolFrame(event.toolCallId);
@@ -771,6 +772,7 @@ export class AgentTranscriptProjector {
       ...hit.frame,
       state: isError ? 'error' : 'done',
       output: event.output,
+      ...(event.details !== undefined ? { details: event.details } : {}),
       error: isError && typeof event.output === 'string' ? event.output : undefined,
     };
     this.toolFrames.set(event.toolCallId, { ...hit, frame });

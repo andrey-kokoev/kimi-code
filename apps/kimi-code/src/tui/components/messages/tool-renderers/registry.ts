@@ -29,6 +29,7 @@ import type {
   ResultRenderer,
   ToolRenderDefinition,
   ToolRenderDefinitions,
+  ToolRenderDefinitionRegistryLike,
 } from './types';
 
 /**
@@ -83,6 +84,8 @@ export function pickResultRenderer(toolName: string): ResultRenderer {
  */
 export class ToolRenderDefinitionRegistry {
   private readonly definitions = new Map<string, AnyToolRenderDefinition>();
+  /** Startup definitions are explicit host choices and cannot be shadowed by later registration. */
+  private readonly explicitNames = new Set<string>();
 
   constructor(definitions: ToolRenderDefinitions = []) {
     this.replace(definitions);
@@ -90,8 +93,12 @@ export class ToolRenderDefinitionRegistry {
 
   replace(definitions: ToolRenderDefinitions): void {
     this.definitions.clear();
+    this.explicitNames.clear();
     for (const definition of definitionsToArray(definitions)) {
-      if (definition.name.length > 0) this.definitions.set(definition.name, definition);
+      if (definition.name.length > 0) {
+        this.definitions.set(definition.name, definition);
+        this.explicitNames.add(definition.name);
+      }
     }
   }
 
@@ -99,6 +106,7 @@ export class ToolRenderDefinitionRegistry {
     definition: ToolRenderDefinition<TArgs, TState>,
   ): () => void {
     const name = definition.name;
+    if (this.explicitNames.has(name)) return () => {};
     const previous = this.definitions.get(name);
     this.definitions.set(name, definition);
     return () => {
@@ -109,6 +117,7 @@ export class ToolRenderDefinitionRegistry {
   }
 
   unregister(name: string): boolean {
+    this.explicitNames.delete(name);
     return this.definitions.delete(name);
   }
 
@@ -126,32 +135,22 @@ function definitionsToArray(
 ): readonly AnyToolRenderDefinition[] {
   if (Array.isArray(definitions)) return definitions;
   if (definitions instanceof Map) return [...definitions.values()];
+  if (isRegistryLike(definitions)) return definitions.entries();
   return Object.values(definitions);
 }
 
-/** Process-wide opt-in registry used by direct ToolCallComponent consumers. */
-const defaultToolRenderDefinitions = new ToolRenderDefinitionRegistry();
-
-export function registerToolRenderDefinition<TArgs extends object, TState>(
-  definition: ToolRenderDefinition<TArgs, TState>,
-): () => void {
-  return defaultToolRenderDefinitions.register(definition);
+function isRegistryLike(
+  definitions: ToolRenderDefinitions,
+): definitions is ToolRenderDefinitionRegistryLike {
+  return (
+    typeof definitions === 'object' &&
+    definitions !== null &&
+    !Array.isArray(definitions) &&
+    !(definitions instanceof Map) &&
+    typeof (definitions as ToolRenderDefinitionRegistryLike).resolve === 'function' &&
+    typeof (definitions as ToolRenderDefinitionRegistryLike).entries === 'function'
+  );
 }
-
-export function resolveToolRenderDefinition(
-  toolName: string,
-): AnyToolRenderDefinition | undefined {
-  return defaultToolRenderDefinitions.resolve(toolName);
-}
-
-export function unregisterToolRenderDefinition(toolName: string): boolean {
-  return defaultToolRenderDefinitions.unregister(toolName);
-}
-
-/** Backwards-friendly aliases for hosts that call these simply "tool definitions". */
-export const registerToolDefinition = registerToolRenderDefinition;
-export const resolveToolDefinition = resolveToolRenderDefinition;
-export const unregisterToolDefinition = unregisterToolRenderDefinition;
 
 export type {
   AnyToolRenderDefinition,
@@ -161,7 +160,9 @@ export type {
   ToolRenderContext,
   ToolRenderDefinition,
   ToolRenderDefinitions,
+  ToolRenderDefinitionRegistryLike,
   ToolRenderResultOptions,
+  ToolRenderUpdate,
   ToolRendererDefinition,
   ToolRenderShell,
   ToolResultRenderer,

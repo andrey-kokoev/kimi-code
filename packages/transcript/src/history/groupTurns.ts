@@ -64,6 +64,8 @@ export interface HistoryMessage {
   readonly toolCalls?: readonly HistoryToolCall[];
   readonly toolCallId?: string;
   readonly isError?: boolean;
+  /** Structured tool-owned result data preserved for transcript renderers. */
+  readonly details?: unknown;
   readonly origin?: { readonly kind: string };
 }
 
@@ -250,6 +252,7 @@ export function groupMessagesIntoSnapshot(
           ...frame,
           state: message.isError ? 'error' : 'done',
           output,
+          ...(message.details !== undefined ? { details: message.details } : {}),
           error: message.isError ? output : undefined,
         };
         replaceToolFrame(turn!, message.toolCallId!, patched);

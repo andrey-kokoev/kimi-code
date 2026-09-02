@@ -236,13 +236,18 @@ describe('reduceContextTranscript', () => {
         name: 'Bash',
         args: { command: 'echo hi' },
       }),
-      loopEvent({ type: 'tool.result', toolCallId: 'call_1', result: { output: 'hi' } }),
+      loopEvent({
+        type: 'tool.result',
+        toolCallId: 'call_1',
+        result: { output: 'hi', details: { rows: [{ id: 1 }] } },
+      }),
       loopEvent({ type: 'step.end', uuid: 's1' }),
     ]);
     expect(result.entries.map((m) => m.role)).toEqual(['user', 'assistant', 'tool']);
     expect(result.entries[1]!.toolCalls).toHaveLength(1);
     expect(result.entries[1]!.toolCalls[0]!.id).toBe('call_1');
     expect(result.entries[2]!.toolCallId).toBe('call_1');
+    expect(result.entries[2]!.details).toEqual({ rows: [{ id: 1 }] });
     expect(result.foldedLength).toBe(3);
   });
 

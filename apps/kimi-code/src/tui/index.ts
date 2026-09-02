@@ -7,18 +7,12 @@ export type {
   ToolDefinition,
   ToolRenderContext,
   ToolRenderDefinition,
+  ToolRenderDefinitionRegistryLike,
   ToolRenderDefinitions,
   ToolRenderResultOptions,
+  ToolRenderUpdate,
   ToolRendererDefinition,
   ToolRenderShell,
   ToolResultRenderer,
 } from './components/messages/tool-renderers/types';
-export {
-  ToolRenderDefinitionRegistry,
-  registerToolDefinition,
-  registerToolRenderDefinition,
-  resolveToolDefinition,
-  resolveToolRenderDefinition,
-  unregisterToolDefinition,
-  unregisterToolRenderDefinition,
-} from './components/messages/tool-renderers/registry';
+export { ToolRenderDefinitionRegistry } from './components/messages/tool-renderers/registry';

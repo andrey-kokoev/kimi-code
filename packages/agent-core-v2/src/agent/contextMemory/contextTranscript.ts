@@ -39,6 +39,7 @@ interface MutableMessage {
   toolCalls: ToolCall[];
   toolCallId?: string;
   isError?: boolean;
+  details?: unknown;
   origin?: ContextMessage['origin'];
 }
 
@@ -154,6 +155,7 @@ export function createContextTranscriptReducer(): ContextTranscriptReducer {
             toolCalls: [],
             toolCallId: event.toolCallId,
             isError: event.result.isError,
+            ...(event.result.details !== undefined ? { details: event.result.details } : {}),
           },
           time,
         });
@@ -248,6 +250,7 @@ function toMutableEntry(message: ContextMessage, time: number | undefined): Muta
       toolCalls: [...message.toolCalls],
       ...(message.toolCallId !== undefined ? { toolCallId: message.toolCallId } : {}),
       ...(message.isError !== undefined ? { isError: message.isError } : {}),
+      ...(message.details !== undefined ? { details: message.details } : {}),
       ...(message.origin !== undefined ? { origin: message.origin } : {}),
     },
     time,

@@ -104,6 +104,8 @@ export type ContextMessage = Message & {
   readonly origin?: PromptOrigin | undefined;
   readonly isError?: boolean;
   readonly note?: string;
+  /** Structured tool-owned result data preserved for renderers and replay. */
+  readonly details?: unknown;
 };
 
 export interface UserMessageRecord {

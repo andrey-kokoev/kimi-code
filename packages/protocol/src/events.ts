@@ -807,6 +807,8 @@ export interface ToolResultEvent {
   readonly turnId: number;
   readonly toolCallId: string;
   readonly output: unknown;
+  /** Structured tool-owned data; kept separate from the model-facing output. */
+  readonly details?: unknown;
   readonly isError?: boolean;
   readonly synthetic?: boolean;
 }
@@ -1731,6 +1733,7 @@ export const toolResultEventSchema = z.object({
   turnId: z.number(),
   toolCallId: z.string(),
   output: z.unknown(),
+  details: z.unknown().optional(),
   isError: z.boolean().optional(),
   synthetic: z.boolean().optional(),
 }) satisfies z.ZodType<ToolResultEvent>;

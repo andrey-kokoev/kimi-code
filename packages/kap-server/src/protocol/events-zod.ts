@@ -822,6 +822,7 @@ export const toolResultEventSchema = z.object({
   turnId: z.number(),
   toolCallId: z.string(),
   output: z.unknown(),
+  details: z.unknown().optional(),
   isError: z.boolean().optional(),
   synthetic: z.boolean().optional(),
 }) satisfies z.ZodType<ToolResultEvent>;

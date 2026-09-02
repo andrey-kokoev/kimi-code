@@ -115,6 +115,8 @@ export type ContextMessage = Message & {
    * the provider boundary and stripped from the wire message itself.
    */
   readonly note?: string;
+  /** Structured tool-owned result data preserved for renderers and replay. */
+  readonly details?: unknown;
 };
 
 export interface UserMessageRecord {

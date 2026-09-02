@@ -145,16 +145,37 @@ async function retryAfterReconnect(
 
 function normalizeMcpToolResult(result: {
   readonly output: ExecutableToolResult['output'];
+  readonly details?: unknown;
   readonly isError: boolean;
   readonly note?: string;
   readonly truncated?: true;
 }): ExecutableToolResult {
   if (result.isError) {
     return result.truncated === true
-      ? { output: result.output, isError: true, note: result.note, truncated: true }
-      : { output: result.output, isError: true, note: result.note };
+      ? {
+          output: result.output,
+          ...(result.details !== undefined ? { details: result.details } : {}),
+          isError: true,
+          note: result.note,
+          truncated: true,
+        }
+      : {
+          output: result.output,
+          ...(result.details !== undefined ? { details: result.details } : {}),
+          isError: true,
+          note: result.note,
+        };
   }
   return result.truncated === true
-    ? { output: result.output, note: result.note, truncated: true }
-    : { output: result.output, note: result.note };
+    ? {
+        output: result.output,
+        ...(result.details !== undefined ? { details: result.details } : {}),
+        note: result.note,
+        truncated: true,
+      }
+    : {
+        output: result.output,
+        ...(result.details !== undefined ? { details: result.details } : {}),
+        note: result.note,
+      };
 }

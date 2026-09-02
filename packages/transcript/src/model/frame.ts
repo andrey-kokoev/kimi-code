@@ -2,7 +2,7 @@
  * TranscriptFrame — the leaf render unit inside a step.
  *
  * The union is closed ("structure closed"): every kind is listed here. Tool
- * payloads (`input` / `output` / `display`) are open content — the server
+ * payloads (`input` / `output` / `details` / `display`) are open content — the server
  * copies engine data through opaquely and only the view layer interprets it.
  *
  * Frames never nest. Cross-references are by id: a tool frame may point at a
@@ -82,6 +82,8 @@ export interface ToolCallFrame {
   /** Open content envelopes — opaque to this layer. */
   readonly input?: unknown;
   readonly output?: unknown;
+  /** Structured tool-owned result data, separate from model-facing output. */
+  readonly details?: unknown;
   readonly display?: unknown;
   readonly error?: string;
   /**

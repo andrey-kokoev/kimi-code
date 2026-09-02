@@ -43,7 +43,14 @@ describe('SubagentActivityStore', () => {
       ev({ type: 'tool.progress', turnId: 1, toolCallId: 't1', update: { kind: 'stdout', text: 'line1\nline2\n' } }),
     );
     store.applyEvent(
-      ev({ type: 'tool.result', turnId: 1, toolCallId: 't1', output: 'a\nb\nc', isError: false }),
+      ev({
+        type: 'tool.result',
+        turnId: 1,
+        toolCallId: 't1',
+        output: 'a\nb\nc',
+        details: { renderer: 'grep', matches: 3 },
+        isError: false,
+      }),
     );
 
     const record = store.get('agent-1');
@@ -56,6 +63,7 @@ describe('SubagentActivityStore', () => {
     expect(call?.args).toEqual({ pattern: 'foo' });
     expect(call?.status).toBe('done');
     expect(call?.result?.output).toBe('a\nb\nc');
+    expect(call?.result?.details).toEqual({ renderer: 'grep', matches: 3 });
     expect(call?.result?.is_error).toBe(false);
     expect(call?.liveOutputTail).toBeUndefined();
     expect(call?.durationMs).toBeGreaterThanOrEqual(0);

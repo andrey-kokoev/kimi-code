@@ -26,6 +26,7 @@ describe('loop-event fold parity', () => {
       toolCallId: m.toolCallId,
       isError: m.isError,
       note: m.note,
+      details: m.details,
     }));
   }
 
@@ -42,6 +43,7 @@ describe('loop-event fold parity', () => {
         toolCalls: [],
         toolCallId: 'c1',
         isError: false,
+        details: { source: 'lookup', rows: [1, 2] },
       },
     );
     const baseline = comparable(context.get());
@@ -63,7 +65,11 @@ describe('loop-event fold parity', () => {
     context.appendLoopEvent({
       type: 'tool.result',
       toolCallId: 'c1',
-      result: { output: 'lookup result', isError: false },
+      result: {
+        output: 'lookup result',
+        isError: false,
+        details: { source: 'lookup', rows: [1, 2] },
+      },
     });
     context.appendLoopEvent({ type: 'step.end', uuid: 's1' });
     const folded = comparable(context.get());

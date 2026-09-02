@@ -96,6 +96,7 @@ export type LoopRecordedEvent =
       readonly toolCallId: string;
       readonly result: {
         readonly output: string | readonly ContentPart[];
+        readonly details?: unknown;
         readonly isError?: boolean;
         readonly note?: string;
       };
@@ -179,6 +180,7 @@ export function foldLoopEvent(
         ...createToolMessage(event.toolCallId, typeof output === 'string' ? output : [...output]),
         isError: event.result.isError,
         note: event.result.note,
+        ...(event.result.details !== undefined ? { details: event.result.details } : {}),
       };
       ctx.pending.delete(event.toolCallId);
       return bind(flushDeferred([...state, toolMessage], ctx), ctx);

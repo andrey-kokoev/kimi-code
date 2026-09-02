@@ -11,18 +11,19 @@ import {
 import { clipboard } from '#/utils/clipboard/clipboard-native';
 import { openUrl } from '#/utils/open-url';
 
-import { FooterComponent } from './components/chrome/footer';import { GutterContainer } from './components/chrome/gutter-container';
+import { FooterComponent } from './components/chrome/footer';
+import { GutterContainer } from './components/chrome/gutter-container';
 import type { MoonLoader, SpinnerStyle } from './components/chrome/moon-loader';
 import { TodoPanelComponent } from './components/chrome/todo-panel';
 import type { SessionRow } from './components/dialogs/session-picker';
 import { CustomEditor } from './components/editor/custom-editor';
 import { DEFAULT_TUI_CONFIG } from './config';
 import { CHROME_GUTTER } from './constant/rendering';
+import { ToolRenderDefinitionRegistry } from './components/messages/tool-renderers/registry';
 import type { TasksBrowserState } from './controllers/tasks-browser';
 import { currentTheme, type Theme } from './theme';
 import { setMarkdownRenderLatex } from './utils/markdown-options';
 import { createTerminalState, type TerminalState } from './utils/terminal-state';
-import type { ToolRenderDefinition } from './components/messages/tool-renderers/types';
 import {
   INITIAL_LIVE_PANE,
   type AppState,
@@ -59,8 +60,8 @@ export interface TUIState {
   terminalState: TerminalState;
   activitySpinner: { instance: MoonLoader; style: SpinnerStyle } | null;
   toolOutputExpanded: boolean;
-  /** Optional tool-owned TUI renderers keyed by the tool's exact name. */
-  toolRenderDefinitions?: ReadonlyMap<string, ToolRenderDefinition>;
+  /** Per-TUI registry of optional tool-owned renderers. */
+  toolRenderDefinitions: ToolRenderDefinitionRegistry;
   sessions: SessionRow[];
   loadingSessions: boolean;
   /** Keyset cursor for the next older page; `undefined` when the listing is exhausted. */
@@ -82,22 +83,11 @@ export interface TUIState {
   swarmModeEntry: 'manual' | 'task' | undefined;
 }
 
-function createToolRenderDefinitionMap(
+function createToolRenderDefinitionRegistry(
   definitions: KimiTUIOptions['toolDefinitions'],
-): ReadonlyMap<string, ToolRenderDefinition> {
-  const entries =
-    definitions === undefined
-      ? []
-      : Array.isArray(definitions)
-        ? definitions
-        : definitions instanceof Map
-          ? [...definitions.values()]
-          : Object.values(definitions);
-  return new Map(
-    entries
-      .filter((definition) => definition.name.length > 0)
-      .map((definition) => [definition.name, definition] as const),
-  );
+): ToolRenderDefinitionRegistry {
+  if (definitions instanceof ToolRenderDefinitionRegistry) return definitions;
+  return new ToolRenderDefinitionRegistry(definitions ?? []);
 }
 
 export function createTUIState(options: KimiTUIOptions): TUIState {
@@ -194,7 +184,7 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
     terminalState: createTerminalState(),
     activitySpinner: null,
     toolOutputExpanded: false,
-    toolRenderDefinitions: createToolRenderDefinitionMap(options.toolDefinitions),
+    toolRenderDefinitions: createToolRenderDefinitionRegistry(options.toolDefinitions),
     sessions: [],
     loadingSessions: false,
     sessionsNextCursor: undefined,

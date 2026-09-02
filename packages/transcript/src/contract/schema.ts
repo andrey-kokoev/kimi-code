@@ -123,6 +123,7 @@ export const toolCallFrameSchema = z.object({
   state: z.enum(['running', 'done', 'error']),
   input: z.unknown().optional(),
   output: z.unknown().optional(),
+  details: z.unknown().optional(),
   display: z.unknown().optional(),
   error: z.string().optional(),
   inputText: z.string().optional(),

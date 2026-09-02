@@ -127,6 +127,7 @@ export class SubAgentEventHandler {
       toolCall.finishSubToolCall({
         tool_call_id: `${childAgentId}:${event.toolCallId}`,
         output: serializeToolResultOutput(event.output),
+        ...(event.details !== undefined ? { details: event.details } : {}),
         is_error: event.isError,
       });
     } else if (event.type === 'agent.status.updated') {

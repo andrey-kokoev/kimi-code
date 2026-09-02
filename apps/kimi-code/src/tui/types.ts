@@ -12,9 +12,7 @@ import type {
 import type { NotificationsConfig, StatusLineConfig, UpgradePreferences } from './config';
 import type { PendingApproval, PendingQuestion } from './reverse-rpc/types';
 import type { ColorToken, ThemeName } from './theme';
-import type {
-  ToolRenderDefinitions,
-} from './components/messages/tool-renderers/types';
+import type { ToolRenderDefinitions } from './components/messages/tool-renderers/types';
 
 export type {
   AnyToolRenderDefinition,
@@ -22,8 +20,10 @@ export type {
   ToolDefinition,
   ToolRenderContext,
   ToolRenderDefinition,
+  ToolRenderDefinitionRegistryLike,
   ToolRenderDefinitions,
   ToolRenderResultOptions,
+  ToolRenderUpdate,
   ToolRendererDefinition,
   ToolRenderShell,
   ToolResultRenderer,

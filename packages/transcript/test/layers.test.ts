@@ -359,6 +359,7 @@ describe('contract schemas', () => {
         frame: {
           kind: 'tool', frameId: 't1.1.c1', toolCallId: 'c1', name: 'Bash', state: 'running',
           inputText: '{"command":"ls',
+          details: { renderer: 'bash', rows: 2 },
           progress: { kind: 'progress', text: 'half', percent: 50, customKind: 'bar', customData: { x: 1 } },
         },
       },
@@ -499,13 +500,20 @@ describe('groupMessagesIntoSnapshot (cold path)', () => {
     const done = groupMessagesIntoSnapshot([
       { role: 'user', content: [{ type: 'text', text: 'run it' }], toolCalls: [], origin: { kind: 'user' } },
       { role: 'assistant', content: [], toolCalls: [{ id: 'c1', name: 'Bash', arguments: '{}' }] },
-      { role: 'tool', content: [{ type: 'text', text: 'done.txt' }], toolCallId: 'c1', toolCalls: [] },
+      {
+        role: 'tool',
+        content: [{ type: 'text', text: 'done.txt' }],
+        toolCallId: 'c1',
+        toolCalls: [],
+        details: { renderer: 'bash', exitCode: 0 },
+      },
     ]);
     const doneTurn = done.items[0];
     if (doneTurn?.kind !== 'turn') throw new Error('expected turn');
     const doneTool = doneTurn.steps[0]?.frames.find((f) => f.kind === 'tool');
     expect(doneTool?.kind === 'tool' && doneTool.state).toBe('done');
     expect(doneTool?.kind === 'tool' && doneTool.output).toBe('done.txt');
+    expect(doneTool?.kind === 'tool' && doneTool.details).toEqual({ renderer: 'bash', exitCode: 0 });
   });
 
   it('opens a turn for subagent run prompts recorded as system triggers', () => {

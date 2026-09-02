@@ -90,6 +90,7 @@ interface MutableMessage {
   toolCallId?: string;
   isError?: boolean | undefined;
   note?: string | undefined;
+  details?: unknown;
   origin?: ContextMessage['origin'];
 }
 
@@ -198,6 +199,7 @@ export function reduceWireRecords(records: Iterable<AgentRecord>): {
             toolCallId: event.toolCallId,
             isError: event.result.isError,
             note: event.result.note,
+            ...(event.result.details !== undefined ? { details: event.result.details } : {}),
           },
           time,
         });

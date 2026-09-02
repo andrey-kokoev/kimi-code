@@ -63,6 +63,8 @@ export type ExecutableToolOutput = string | ContentPart[];
 
 export interface ExecutableToolSuccessResult {
   readonly output: ExecutableToolOutput;
+  /** Structured tool-owned data preserved for UI renderers and replay. */
+  readonly details?: unknown;
   readonly isError?: false | undefined;
   /**
    * Internal loop-control hint. Tool result events strip this field before
@@ -96,6 +98,8 @@ export interface ExecutableToolSuccessResult {
 
 export interface ExecutableToolErrorResult {
   readonly output: ExecutableToolOutput;
+  /** Structured tool-owned data preserved for UI renderers and replay. */
+  readonly details?: unknown;
   readonly isError: true;
   /** See {@link ExecutableToolSuccessResult.message}. */
   readonly message?: string | undefined;

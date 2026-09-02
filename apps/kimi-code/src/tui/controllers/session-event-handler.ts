@@ -653,17 +653,20 @@ export class SessionEventHandler {
   }
 
   private handleToolProgress(event: ToolProgressEvent): void {
-    const text = event.update.text;
-    if (text === undefined || text.length === 0) return;
     const tc = this.host.streamingUI.getToolComponent(event.toolCallId);
     if (tc === undefined) return;
-    if (event.update.kind === 'status') {
-      tc.appendProgress(text);
-      return;
+    const text = event.update.text;
+    if (text !== undefined && text.length > 0) {
+      if (event.update.kind === 'status') {
+        tc.appendProgress(text, event.update);
+        return;
+      }
+      if (event.update.kind === 'stdout' || event.update.kind === 'stderr') {
+        tc.appendLiveOutput(text, event.update);
+        return;
+      }
     }
-    if (event.update.kind === 'stdout' || event.update.kind === 'stderr') {
-      tc.appendLiveOutput(text);
-    }
+    tc.appendPartialUpdate(event.update);
   }
 
   private handleToolResult(event: ToolResultEvent): void {
@@ -673,6 +676,7 @@ export class SessionEventHandler {
     const resultData: ToolResultBlockData = {
       tool_call_id: event.toolCallId,
       output: serializeToolResultOutput(event.output),
+      ...(event.details !== undefined ? { details: event.details } : {}),
       is_error: event.isError,
       synthetic: event.synthetic,
     };

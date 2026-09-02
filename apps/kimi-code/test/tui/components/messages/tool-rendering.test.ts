@@ -1,11 +1,8 @@
 import { Text } from '@moonshot-ai/pi-tui';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { ToolCallComponent } from '#/tui/components/messages/tool-call';
-import {
-  registerToolRenderDefinition,
-  unregisterToolRenderDefinition,
-} from '#/tui/components/messages/tool-renderers/registry';
+import { ToolRenderDefinitionRegistry } from '#/tui/components/messages/tool-renderers/registry';
 import type { ToolRenderDefinition } from '#/tui/components/messages/tool-renderers/types';
 import type { ToolCallBlockData, ToolResultBlockData } from '#/tui/types';
 
@@ -22,12 +19,6 @@ function result(output: string, isError = false): ToolResultBlockData {
 }
 
 describe('tool-owned transcript rendering', () => {
-  afterEach(() => {
-    // The registry is process-wide for direct component consumers. Tests use
-    // unique names, but unregistering makes failures and retries isolated.
-    unregisterToolRenderDefinition('RegisteredTool');
-  });
-
   it('lets a self-rendering definition own the call and result shell', () => {
     const calls: string[] = [];
     const definition: ToolRenderDefinition = {
@@ -100,6 +91,141 @@ describe('tool-owned transcript rendering', () => {
       { output: 'waiting\ndone', isPartial: true },
       { output: 'final', isPartial: false },
     ]);
+  });
+
+  it('passes ordered partial update metadata and custom details to renderers', () => {
+    const partials: Array<{
+      details: unknown;
+      updates: readonly unknown[] | undefined;
+    }> = [];
+    const definition: ToolRenderDefinition = {
+      name: 'MetadataPartial',
+      renderShell: 'self',
+      renderResult: (toolResult, options) => {
+        if (options.isPartial) {
+          partials.push({ details: toolResult.details, updates: options.partialUpdates });
+        }
+        return new Text(toolResult.output, 0, 0);
+      },
+    };
+    const component = new ToolCallComponent(
+      call('MetadataPartial'),
+      undefined,
+      undefined,
+      undefined,
+      definition,
+    );
+
+    component.appendLiveOutput('chunk', {
+      kind: 'stdout',
+      text: 'chunk',
+      percent: 25,
+    });
+    component.appendPartialUpdate({
+      kind: 'custom',
+      customKind: 'phase',
+      customData: { phase: 'waiting' },
+    });
+
+    expect(partials.at(-1)).toEqual({
+      details: { phase: 'waiting' },
+      updates: [
+        { kind: 'stdout', text: 'chunk', percent: 25 },
+        { kind: 'custom', customKind: 'phase', customData: { phase: 'waiting' } },
+      ],
+    });
+  });
+
+  it('gives self-renderers a rich built-in call preview when renderCall is omitted', () => {
+    const component = new ToolCallComponent(
+      call('Read', { path: 'src/index.ts' }),
+      undefined,
+      undefined,
+      undefined,
+      { name: 'Read', renderShell: 'self' },
+    );
+
+    const output = strip(component.render(100).join('\\n'));
+    expect(output).toContain('Read (src/index.ts)');
+    expect(output).not.toContain('Using Read');
+
+    const write = new ToolCallComponent(
+      call('Write', { path: 'src/index.ts', content: 'const value = 1;' }),
+      undefined,
+      undefined,
+      undefined,
+      { name: 'Write', renderShell: 'self' },
+    );
+    expect(strip(write.render(100).join('\n'))).toContain('const value = 1;');
+  });
+
+  it('preserves structured result details for custom renderers', () => {
+    const details: unknown[] = [];
+    const definition: ToolRenderDefinition = {
+      name: 'Detailed',
+      renderShell: 'self',
+      renderCall: () => new Text('detailed call', 0, 0),
+      renderResult: (toolResult) => {
+        details.push(toolResult.details);
+        return new Text('detailed result', 0, 0);
+      },
+    };
+    const component = new ToolCallComponent(
+      call('Detailed'),
+      undefined,
+      undefined,
+      undefined,
+      definition,
+    );
+
+    component.setResult({
+      tool_call_id: 'call_Detailed',
+      output: 'visible output',
+      details: { kind: 'structured', rows: [1, 2] },
+    });
+    component.render(100);
+
+    expect(details.at(-1)).toEqual({ kind: 'structured', rows: [1, 2] });
+  });
+
+  it('keeps progress and live output in arrival order for custom renderers', () => {
+    const partials: string[] = [];
+    const definition: ToolRenderDefinition = {
+      name: 'OrderedPartial',
+      renderShell: 'self',
+      renderResult: (toolResult) => {
+        partials.push(toolResult.output);
+        return new Text(toolResult.output, 0, 0);
+      },
+    };
+    const component = new ToolCallComponent(
+      call('OrderedPartial'),
+      undefined,
+      undefined,
+      undefined,
+      definition,
+    );
+
+    component.appendLiveOutput('first');
+    component.appendProgress('status');
+    component.appendLiveOutput('last');
+
+    expect(partials.at(-1)).toBe('first\nstatus\nlast');
+  });
+
+  it('keeps startup definitions ahead of later registration and isolates registries', () => {
+    const startup = { name: 'PriorityTool', renderCall: () => new Text('startup', 0, 0) };
+    const registry = new ToolRenderDefinitionRegistry([startup]);
+    const dispose = registry.register({
+      name: 'PriorityTool',
+      renderCall: () => new Text('runtime', 0, 0),
+    });
+    const other = new ToolRenderDefinitionRegistry();
+
+    expect(registry.resolve('PriorityTool')).toBe(startup);
+    expect(other.resolve('PriorityTool')).toBeUndefined();
+    dispose();
+    expect(registry.resolve('PriorityTool')).toBe(startup);
   });
 
   it('keeps the existing shell when renderShell is omitted', () => {
@@ -180,15 +306,21 @@ describe('tool-owned transcript rendering', () => {
     expect(output).not.toContain('renderer failed');
   });
 
-  it('uses registered definitions without changing unregistered tool rendering', () => {
-    const dispose = registerToolRenderDefinition({
+  it('uses supplied registry definitions without changing unregistered tool rendering', () => {
+    const registry = new ToolRenderDefinitionRegistry();
+    const dispose = registry.register({
       name: 'RegisteredTool',
       renderShell: 'self',
       renderCall: () => new Text('registered call', 0, 0),
     });
 
     try {
-      const registered = new ToolCallComponent(call('RegisteredTool'), undefined);
+      const registered = new ToolCallComponent(
+        call('RegisteredTool'),
+        undefined,
+        undefined,
+        registry,
+      );
       expect(strip(registered.render(100).join('\n'))).toContain('registered call');
 
       dispose();
